@@ -5,6 +5,9 @@ import networkx as nx
 from rdkit import Chem
 from pathlib import Path
 import sys
+from rdkit.Chem.rdchem import BondType
+from itertools import combinations
+
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from config import config
 
@@ -21,19 +24,20 @@ INV_NUMEXPLICITHS_VOCAB = {v: k for k, v in ATOM_NUMEXPLICITHS_VOCAB.items()}
 INV_NUMIMPLICITHS_VOCAB = {v: k for k, v in ATOM_NUMIMPLICITHS_VOCAB.items()}
 
 class Tokenizer:
-    _vocab_loaded = False
     _operations_loaded = False
     def __init__(self, vocab_path: str = config['vocab_path'], operation_path: str = config['operation_path'], num_operations: int = config['num_operations']):
-        if not Tokenizer._vocab_loaded:
+        self._vocab_loaded = False
+        self._operations_loaded = False
+        if not self._vocab_loaded:
             MolGraph.load_vocab(vocab_path)
             pair_list = [line.strip("\r\n").split() for line in open(vocab_path)]
             motif_smiles_list = [motif for _, motif in pair_list]
             self.vocab = {i: motif for i, motif in enumerate(motif_smiles_list)}
-            Tokenizer._vocab_loaded = True
+            self._vocab_loaded = True
 
-        if not Tokenizer._operations_loaded:
+        if not self._operations_loaded:
             MolGraph.load_operations(operation_path, num_operations)
-            Tokenizer._operations_loaded = True
+            self._operations_loaded = True
     
     def create_star_graph(self, mol: MolGraph) -> nx.Graph:
 
@@ -148,7 +152,6 @@ class Tokenizer:
             IsAromatic = INV_ISAROMATIC_VOCAB[labels[1]]
             FormalCharge = INV_FORMALCHARGE_VOCAB[labels[2]]
             NumExplicitHs = INV_NUMEXPLICITHS_VOCAB[labels[3]]
-            # NumImplicitHs is usually computed automatically by RDKit
 
             atom = Chem.Atom(symbol)
             atom.SetFormalCharge(FormalCharge)
@@ -176,15 +179,116 @@ class Tokenizer:
 
         return Chem.MolToSmiles(mol, canonical=True)    
     
+    def bond_token(self, bondtype: BondType) -> str:
+        if bondtype == BondType.SINGLE:   return "(*)"
+        if bondtype == BondType.DOUBLE:   return "(=)"
+        if bondtype == BondType.TRIPLE:   return "(#)"
+        if bondtype == BondType.AROMATIC: return "(:)"
+        raise ValueError("unknown bond")
+    
+    def order_nodes(self, G: nx.Graph) ->list:
+        def parse_key(node):
+            i, j, k = map(int, node.split('_'))
+            return (i, j, k)
+
+        return sorted(list(G.nodes()), key=parse_key)
+
+    def star_graph_to_sequence(self, star_graph: nx.Graph) -> list:
+        ordering = self.order_nodes(star_graph)
+        id_map = {node: i+1 for i, node in enumerate(ordering)}
+
+        seq = ["(SOG)"]
+        for node in ordering:
+            label, _, site = node.split("_")
+            seq.append(f"({label}_{site})")
+            seq.append(f"({id_map[node]})")
+        seq.append("(αΔ)")
+
+        edges = []
+        for u, v, data in star_graph.edges(data=True):
+            i, j = id_map[u], id_map[v]
+            if i > j: i, j = j, i
+            edges.append((i, j, self.bond_token(data["bondtype"])))
+        edges.sort(key=lambda x: (x[0], x[1]))
+
+        for i, j, bt in edges:
+            seq.extend([f"({i})", f"({j})", bt])
+        seq.append("(EOG)")
+        return seq
 
     def tokenize(self, smiles: str) -> nx.Graph:
         mol_graph = MolGraph(smiles, tokenizer="motif")
         star_graph = self.create_star_graph(mol_graph)
-        return star_graph
+        seq = self.star_graph_to_sequence(star_graph)
+        return seq
     
-    def detokenize(self, graph: nx.Graph) -> str:
+    def sequence_to_star_graph(self, tokens:list) -> nx.Graph:
+
+        # 1) sanity checks & split into node‐block and edge‐block
+        if tokens[0] != "(SOG)" or tokens[-1] != "(EOG)":
+            raise ValueError("Sequence must start with (SOG) and end with (EOG)")
         try:
-            star_graph = self.reconnect_star_graph(graph)
+            α_idx = tokens.index("(αΔ)")
+        except ValueError:
+            raise ValueError("Missing start‐of‐edges token “(αΔ)”")
+
+        node_tokens = tokens[1:α_idx]
+        edge_tokens = tokens[α_idx+1:-1]
+
+        # 2) parse node tokens (should come in pairs)
+        if len(node_tokens) % 2 != 0:
+            raise ValueError("Node block is not an even number of tokens")
+        id_to_type = {}
+        fragments_counter = {}
+        for i in range(0, len(node_tokens), 2):
+            ntok = node_tokens[i]   # e.g. "(103_0)"
+            itok = node_tokens[i+1] # e.g. "(4)"
+            label_site = ntok.strip("()")
+            node_id     = int(itok.strip("()"))
+            if label_site not in fragments_counter:
+                fragments_counter[label_site] = 0
+            else:
+                fragments_counter[label_site] += 1
+
+            fragment_idx, connection_site = label_site.split("_")
+            label_site = f"{fragment_idx}_{fragments_counter[label_site]}_{connection_site}"
+            id_to_type[node_id] = label_site
+
+        # 3) build the empty graph
+        G = nx.Graph()
+        for nid, typ in id_to_type.items():
+            G.add_node(nid, node_type=typ)
+
+        # 4) parse edge tokens (triples)
+        if len(edge_tokens) % 3 != 0:
+            raise ValueError("Edge block is not a multiple of 3 tokens")
+        for i in range(0, len(edge_tokens), 3):
+            u_tok, v_tok, b_tok = edge_tokens[i:i+3]
+            u = int(u_tok.strip("()"))
+            v = int(v_tok.strip("()"))
+            bt = b_tok
+
+            # map back to RDKit
+            if bt == "(*)":
+                bond = BondType.SINGLE
+            elif bt == "(=)":
+                bond = BondType.DOUBLE
+            elif bt == "(#)":
+                bond = BondType.TRIPLE
+            elif bt == "(:)":
+                bond = BondType.AROMATIC
+            else:
+                raise ValueError(f"Unknown bond token {bt}")
+
+            G.add_edge(u, v, bondtype=bond)
+        nx.relabel_nodes(G, id_to_type, copy=False)
+
+        return G
+    
+    def detokenize(self, seq: list) -> str:
+        star_graph = self.sequence_to_star_graph(seq)
+        try:
+            star_graph = self.reconnect_star_graph(star_graph)
             smiles = self.mol_from_feature_graph(star_graph)
 
         except Exception as e:
