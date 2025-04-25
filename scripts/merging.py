@@ -22,12 +22,15 @@ class MolGraph:
     mol_graph: Chem.rdchem.Mol
     merging_graph: nx.Graph
 
-    def __init__(self, smiles: str, idx: int=0) -> "MolGraph":
+    def __init__(self, smiles: str, idx: int=0):
         self.idx = idx
-        self.mol_graph = Chem.MolFromSmiles(smiles)
-        self.merging_graph = nx.Graph(Chem.rdmolops.GetAdjacencyMatrix(self.mol_graph))
-        for atom in self.mol_graph.GetAtoms():
-            self.merging_graph.nodes[atom.GetIdx()]["atom_indices"] = set([atom.GetIdx()])
+        self.smiles = smiles                      # store only the string
+        # build a temporary Mol just to get adjacency:
+        mol = Chem.MolFromSmiles(smiles)
+        adj = Chem.rdmolops.GetAdjacencyMatrix(mol)
+        self.merging_graph = nx.Graph(adj)
+        for atom in mol.GetAtoms():
+            self.merging_graph.nodes[atom.GetIdx()]["atom_indices"] = {atom.GetIdx()}
     
     def apply_merging_operation(self, motif: str, stats: Dict[str, int], indices: Dict[str, Dict[int, int]]) -> None:
         if self.merging_graph.number_of_nodes() == 1:
@@ -78,8 +81,9 @@ def load_mols(train_path: str, num_workers: int) -> List[MolGraph]:
     print(f"[{datetime.now()}] Loading molecules finished. Total: {len(mols)} molecules.\n")
     return mols
 
-def fragment2smiles(mol: MolGraph, indices: List[int]) -> str:
-    smiles = Chem.MolFragmentToSmiles(mol.mol_graph, tuple(indices))
+def fragment2smiles(self, indices: List[int]) -> str:
+    mol = Chem.MolFromSmiles(self.smiles)             # rebuild only when needed
+    smiles = Chem.MolFragmentToSmiles(mol, tuple(indices))
     return Chem.MolToSmiles(Chem.MolFromSmiles(smiles, sanitize=False))
 
 def merge_nodes(graph: nx.Graph, node1: int, node2: int) -> None:
