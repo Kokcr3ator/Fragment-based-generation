@@ -174,7 +174,7 @@ cython_debug/
 .pypirc
 
 train.txt
-test.txt
+# test.txt
 test_scaffolds.txt
 moses.txt
 
