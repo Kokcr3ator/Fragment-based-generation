@@ -1,8 +1,8 @@
 vocab_path: /home/tommaso/Fragment-based-generation/data/vocab.txt
 operation_path: /home/tommaso/Fragment-based-generation/data/operations.txt
 train_path: /home/tommaso/Fragment-based-generation/data/toyset.txt
-num_workers: 2
+num_workers: 12
 num_operations: 500
 num_iters: 500
 min_frequency: 50
-mp_thd: 0.5
+mp_thd: 2

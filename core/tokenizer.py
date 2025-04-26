@@ -8,9 +8,11 @@ import sys
 from rdkit.Chem.rdchem import BondType
 from itertools import combinations
 from collections import defaultdict
+import random
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from config import config
+random.seed(420)
 
 elements = ['*', 'N', 'O', 'Se', 'Cl', 'S', 'C', 'I', 'B', 'Br', 'P', 'Si', 'F']
 INV_ATOM_SYMBOL_VOCAB = {i: e for i, e in enumerate(elements)}
@@ -45,6 +47,7 @@ class Tokenizer:
         self.order_dict = {
             'BFS': self._order_BFS,
             'DFS': self._order_DFS,
+            'RANDOM': self._order_RANDOM,
             'VOCAB_ORDER': self._order_VOCAB_ORDER}
         
     def create_star_graph(self, mol: MolGraph) -> nx.Graph:
@@ -264,7 +267,21 @@ class Tokenizer:
                 ordering.extend(elem.split('/'))
             
         return ordering
-    
+    def _order_RANDOM(self, G: nx.Graph) -> list:
+
+        if self.add_internal_bonds:
+            ordering = list(G.nodes())
+            random.shuffle(ordering)
+            return ordering
+        else:
+            grouped_connection_sites = self._group_connection_sites(G)
+            grouped_ordering = list(grouped_connection_sites.nodes())
+            random.shuffle(grouped_ordering)
+            ordering = []
+            for elem in grouped_ordering:
+                ordering.extend(elem.split('/'))
+            return ordering
+
     def _order_VOCAB_ORDER(self, G: nx.Graph) -> list:
         def parse_key(node):
             i, j, k = map(int, node.split('_'))

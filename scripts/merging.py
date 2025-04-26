@@ -19,7 +19,7 @@ from config import config
 @dataclass
 class MolGraph:
     idx: int
-    mol_graph: Chem.rdchem.Mol
+    # mol_graph: Chem.rdchem.Mol
     merging_graph: nx.Graph
 
     def __init__(self, smiles: str, idx: int=0):
