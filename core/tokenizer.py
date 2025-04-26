@@ -7,27 +7,30 @@ from pathlib import Path
 import sys
 from rdkit.Chem.rdchem import BondType
 from itertools import combinations
+from collections import defaultdict
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from config import config
 
-ATOM_SYMBOL_VOCAB = Vocab(['*', 'N', 'O', 'Se', 'Cl', 'S', 'C', 'I', 'B', 'Br', 'P', 'Si', 'F']).vmap
-ATOM_ISAROMATIC_VOCAB = Vocab([True, False]).vmap
-ATOM_FORMALCHARGE_VOCAB = Vocab(["*", -1, 0, 1, 2, 3]).vmap
-ATOM_NUMEXPLICITHS_VOCAB = Vocab(["*", 0, 1, 2, 3]).vmap
-ATOM_NUMIMPLICITHS_VOCAB = Vocab(["*", 0, 1, 2, 3]).vmap
+elements = ['*', 'N', 'O', 'Se', 'Cl', 'S', 'C', 'I', 'B', 'Br', 'P', 'Si', 'F']
+INV_ATOM_SYMBOL_VOCAB = {i: e for i, e in enumerate(elements)}
+isaromatic = [True, False]
+INV_ISAROMATIC_VOCAB = {i: e for i, e in enumerate(isaromatic)}
+formalcharge = ['*', -1, 0, 1, 2, 3]
+INV_FORMALCHARGE_VOCAB = {i: e for i, e in enumerate(formalcharge)}
+numexplicitHs = ['*', 0, 1, 2, 3]
+INV_NUMEXPLICITHS_VOCAB = {i: e for i, e in enumerate(numexplicitHs)}
+numimplicitHs = ['*', 0, 1, 2, 3]
+INV_NUMIMPLICITHS_VOCAB = {i: e for i, e in enumerate(numimplicitHs)}
 
-INV_ATOM_SYMBOL_VOCAB = {v: k for k, v in ATOM_SYMBOL_VOCAB.items()}
-INV_ISAROMATIC_VOCAB = {v: k for k, v in ATOM_ISAROMATIC_VOCAB.items()}
-INV_FORMALCHARGE_VOCAB = {v: k for k, v in ATOM_FORMALCHARGE_VOCAB.items()}
-INV_NUMEXPLICITHS_VOCAB = {v: k for k, v in ATOM_NUMEXPLICITHS_VOCAB.items()}
-INV_NUMIMPLICITHS_VOCAB = {v: k for k, v in ATOM_NUMIMPLICITHS_VOCAB.items()}
 
 class Tokenizer:
     _operations_loaded = False
-    def __init__(self, vocab_path: str = config['vocab_path'], operation_path: str = config['operation_path'], num_operations: int = config['num_operations']):
+    def __init__(self, vocab_path: str = config['vocab_path'], operation_path: str = config['operation_path'], num_operations: int = config['num_operations'], ordering: str = 'BFS', add_internal_bonds: bool = True):
         self._vocab_loaded = False
         self._operations_loaded = False
+        self.ordering = ordering
+        self.add_internal_bonds = add_internal_bonds
         if not self._vocab_loaded:
             MolGraph.load_vocab(vocab_path)
             pair_list = [line.strip("\r\n").split() for line in open(vocab_path)]
@@ -38,9 +41,16 @@ class Tokenizer:
         if not self._operations_loaded:
             MolGraph.load_operations(operation_path, num_operations)
             self._operations_loaded = True
-    
-    def create_star_graph(self, mol: MolGraph) -> nx.Graph:
 
+        self.order_dict = {
+            'BFS': self._order_BFS,
+            'DFS': self._order_DFS,
+            'VOCAB_ORDER': self._order_VOCAB_ORDER}
+        
+    def create_star_graph(self, mol: MolGraph) -> nx.Graph:
+        """
+        Creates the star graph i.e. the graph whose nodes are the connection sites of the fragments
+        """
         mol.relabel()
         mol_graph, bpe_graph =  mol.mol_graph, mol.merging_graph
 
@@ -86,6 +96,10 @@ class Tokenizer:
         return star_graph
     
     def reconnect_star_graph(self, star_graph: nx.Graph) -> nx.Graph:
+        """
+        From the star graph, reconnects the fragments, add internal bonds in the fragments,
+        removes the connection sites (star nodes)
+        """
         fragments = {}
 
         total_len = 0
@@ -143,9 +157,8 @@ class Tokenizer:
     def mol_from_feature_graph(self, graph: nx.Graph) -> Chem.Mol:
         mol = Chem.RWMol()
         node_to_idx = {}
-        h_info = {}  # Store hydrogen info to set later
+        h_info = {} 
 
-        # First pass: add atoms with symbol, charge, aromaticity
         for node, data in graph.nodes(data=True):
             labels = data['label']
             symbol = INV_ATOM_SYMBOL_VOCAB[labels[0]]
@@ -160,18 +173,15 @@ class Tokenizer:
 
             idx = mol.AddAtom(atom)
             node_to_idx[node] = idx
-            h_info[idx] = NumExplicitHs  # Save explicit H info for later
+            h_info[idx] = NumExplicitHs 
 
-        # Second pass: add bonds
         for u, v, edge_data in graph.edges(data=True):
             bondtype = edge_data.get('bondtype')
             mol.AddBond(node_to_idx[u], node_to_idx[v], bondtype)
 
-        # Now that the molecule is built, apply NumExplicitHs
         for idx, num_h in h_info.items():
             mol.GetAtomWithIdx(idx).SetNumExplicitHs(num_h)
 
-        # Final sanitization and SMILES conversion
         try:
             Chem.SanitizeMol(mol)
         except Exception as e:
@@ -179,22 +189,99 @@ class Tokenizer:
 
         return Chem.MolToSmiles(mol, canonical=True)    
     
-    def bond_token(self, bondtype: BondType) -> str:
+    def _bond_type_2_bond_token(self, bondtype: BondType) -> str:
         if bondtype == BondType.SINGLE:   return "(*)"
         if bondtype == BondType.DOUBLE:   return "(=)"
         if bondtype == BondType.TRIPLE:   return "(#)"
         if bondtype == BondType.AROMATIC: return "(:)"
+        if bondtype == 'INTERNAL' :       return "(-)"
         raise ValueError("unknown bond")
     
-    def order_nodes(self, G: nx.Graph) ->list:
+    def _bond_token_2_bond_type(self, bond_token: str) -> BondType:
+        if  bond_token == "(*)": return BondType.SINGLE
+        elif bond_token == "(=)": return BondType.DOUBLE
+        elif bond_token == "(#)": return BondType.TRIPLE
+        elif bond_token == "(:)": return BondType.AROMATIC
+        elif bond_token == "(-)": return 'INTERNAL'
+        else:
+            raise ValueError(f"Unknown bond token: {bond_token}")
+                
+    def _add_internal_bonds(self, star_graph: nx.Graph) -> nx.Graph:
+
+        groups = defaultdict(list)
+        for node in star_graph.nodes():
+            number, order, *_ = node.split('_')
+            key = (number, order)
+            groups[key].append(node)
+
+        for nodes_with_same_pair in groups.values():
+            for u, v in combinations(nodes_with_same_pair, 2):
+                if not star_graph.has_edge(u, v):
+                    star_graph.add_edge(u, v, bondtype='INTERNAL')
+        return star_graph
+    
+
+    def _group_connection_sites(self, star_graph: nx.Graph) -> nx.Graph:
+        groups = defaultdict(list)
+        for node in star_graph.nodes():
+            number, order, *_ = node.split('_')
+            groups[(number, order)].append(node)
+
+        mapping = {}
+        for members in groups.values():
+            fused_name = "/".join(sorted(members))
+            for n in members:
+                mapping[n] = fused_name
+
+        H = nx.relabel_nodes(star_graph, mapping, copy=True)
+        H.remove_edges_from(nx.selfloop_edges(H))
+
+        return H
+                
+
+    def _order_BFS(self, G: nx.Graph) -> list:
+        if self.add_internal_bonds:
+            ordering = nx.bfs_tree(G, source=list(G.nodes())[0])
+            return ordering
+        else:
+            grouped_connection_sites = self._group_connection_sites(G)
+            grouped_ordering = nx.bfs_tree(grouped_connection_sites, source=list(grouped_connection_sites.nodes())[0])
+            ordering = []
+            for elem in grouped_ordering:
+                ordering.extend(elem.split('/'))
+            return ordering
+
+    
+    def _order_DFS(self, G: nx.Graph) -> list:
+        if self.add_internal_bonds:
+            ordering = nx.dfs_tree(G, source=list(G.nodes())[0])
+            
+        else:
+            grouped_connection_sites = self._group_connection_sites(G)
+            grouped_ordering = nx.dfs_tree(grouped_connection_sites, source=list(grouped_connection_sites.nodes())[0])
+            ordering = []
+            for elem in grouped_ordering:
+                ordering.extend(elem.split('/'))
+            
+        return ordering
+    
+    def _order_VOCAB_ORDER(self, G: nx.Graph) -> list:
         def parse_key(node):
             i, j, k = map(int, node.split('_'))
             return (i, j, k)
+        ordering = sorted(list(G.nodes()), key=parse_key)
+        return ordering
 
-        return sorted(list(G.nodes()), key=parse_key)
-
+    def _order_nodes(self, G: nx.Graph) ->list:
+        if self.add_internal_bonds:
+            G = self._add_internal_bonds(G)
+        ordering = self.order_dict[self.ordering](G)
+        return ordering
+        
     def star_graph_to_sequence(self, star_graph: nx.Graph) -> list:
-        ordering = self.order_nodes(star_graph)
+        if self.add_internal_bonds:
+            star_graph = self._add_internal_bonds(star_graph)
+        ordering = self._order_nodes(star_graph)
         id_map = {node: i+1 for i, node in enumerate(ordering)}
 
         seq = ["(SOG)"]
@@ -208,7 +295,7 @@ class Tokenizer:
         for u, v, data in star_graph.edges(data=True):
             i, j = id_map[u], id_map[v]
             if i > j: i, j = j, i
-            edges.append((i, j, self.bond_token(data["bondtype"])))
+            edges.append((i, j, self._bond_type_2_bond_token(data["bondtype"])))
         edges.sort(key=lambda x: (x[0], x[1]))
 
         for i, j, bt in edges:
@@ -222,8 +309,23 @@ class Tokenizer:
         seq = self.star_graph_to_sequence(star_graph)
         return seq
     
-    def sequence_to_star_graph(self, tokens:list) -> nx.Graph:
+    def build_fragments_disconnected_graph(self, edge_tokens: list) -> nx.Graph:
+        G = nx.Graph()
+        for i in range(0, len(edge_tokens), 3):
+            u_tok, v_tok, b_tok = edge_tokens[i:i+3]
 
+            u = int(u_tok.strip("()"))
+            v = int(v_tok.strip("()"))
+            if u not in G:
+                G.add_node(u)
+            if v not in G:
+                G.add_node(v)
+            if b_tok == "(-)":
+                G.add_edge(u, v)
+        return G
+
+    
+    def sequence_to_star_graph(self, tokens:list) -> nx.Graph:
         # 1) sanity checks & split into node‐block and edge‐block
         if tokens[0] != "(SOG)" or tokens[-1] != "(EOG)":
             raise ValueError("Sequence must start with (SOG) and end with (EOG)")
@@ -234,53 +336,66 @@ class Tokenizer:
 
         node_tokens = tokens[1:α_idx]
         edge_tokens = tokens[α_idx+1:-1]
-
-        # 2) parse node tokens (should come in pairs)
         if len(node_tokens) % 2 != 0:
             raise ValueError("Node block is not an even number of tokens")
-        id_to_type = {}
-        fragments_counter = {}
-        for i in range(0, len(node_tokens), 2):
-            ntok = node_tokens[i]   # e.g. "(103_0)"
-            itok = node_tokens[i+1] # e.g. "(4)"
-            label_site = ntok.strip("()")
-            node_id     = int(itok.strip("()"))
-            if label_site not in fragments_counter:
-                fragments_counter[label_site] = 0
-            else:
-                fragments_counter[label_site] += 1
 
-            fragment_idx, connection_site = label_site.split("_")
-            label_site = f"{fragment_idx}_{fragments_counter[label_site]}_{connection_site}"
-            id_to_type[node_id] = label_site
+        if self.add_internal_bonds:
 
-        # 3) build the empty graph
+            fragments_disconnected_graph = self.build_fragments_disconnected_graph(edge_tokens)
+            id_2_connection_site = {}
+            for i in range(0, len(node_tokens), 2):
+                ntok = node_tokens[i]   # e.g. "(103_0)"
+                itok = node_tokens[i+1] # e.g. "(4)"
+                connection_site = ntok.strip("()")
+                node_id     = int(itok.strip("()"))
+                id_2_connection_site[node_id] = connection_site
+            fragments_counter = {}
+            id_to_type = {}
+            fragments = list(nx.connected_components(fragments_disconnected_graph))
+            for fragment in fragments:
+                fragment_idx = id_2_connection_site[next(iter(fragment))].split("_")[0]
+                if fragment_idx not in fragments_counter:
+                    fragments_counter[fragment_idx] = 0
+                else:
+                    fragments_counter[fragment_idx] += 1
+                
+                for node_id in fragment:
+                    connection_site = id_2_connection_site[node_id].split("_")[1]
+                    label_site = f"{fragment_idx}_{fragments_counter[fragment_idx]}_{connection_site}"
+                    id_to_type[node_id] = label_site
+
+        else:
+
+            id_to_type = {}
+            fragments_counter = {}
+            for i in range(0, len(node_tokens), 2):
+                ntok = node_tokens[i]   # e.g. "(103_0)"
+                itok = node_tokens[i+1] # e.g. "(4)"
+                label_site = ntok.strip("()")
+                node_id     = int(itok.strip("()"))
+                if label_site not in fragments_counter:
+                    fragments_counter[label_site] = 0
+                else:
+                    fragments_counter[label_site] += 1
+
+                fragment_idx, connection_site = label_site.split("_")
+                label_site = f"{fragment_idx}_{fragments_counter[label_site]}_{connection_site}"
+                id_to_type[node_id] = label_site
+
         G = nx.Graph()
-        for nid, typ in id_to_type.items():
-            G.add_node(nid, node_type=typ)
+        for nid in id_to_type.keys():
+            G.add_node(nid)
 
-        # 4) parse edge tokens (triples)
         if len(edge_tokens) % 3 != 0:
             raise ValueError("Edge block is not a multiple of 3 tokens")
         for i in range(0, len(edge_tokens), 3):
             u_tok, v_tok, b_tok = edge_tokens[i:i+3]
             u = int(u_tok.strip("()"))
             v = int(v_tok.strip("()"))
-            bt = b_tok
+            bond = self._bond_token_2_bond_type(b_tok)
+            if bond != 'INTERNAL':
+                G.add_edge(u, v, bondtype=bond)
 
-            # map back to RDKit
-            if bt == "(*)":
-                bond = BondType.SINGLE
-            elif bt == "(=)":
-                bond = BondType.DOUBLE
-            elif bt == "(#)":
-                bond = BondType.TRIPLE
-            elif bt == "(:)":
-                bond = BondType.AROMATIC
-            else:
-                raise ValueError(f"Unknown bond token {bt}")
-
-            G.add_edge(u, v, bondtype=bond)
         nx.relabel_nodes(G, id_to_type, copy=False)
 
         return G
