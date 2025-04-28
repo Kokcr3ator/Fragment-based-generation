@@ -176,6 +176,6 @@ cython_debug/
 train.txt
 # test.txt
 test_scaffolds.txt
-moses.txt
+# moses.txt
 
 *.ipynb

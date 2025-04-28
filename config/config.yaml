@@ -1,8 +1,8 @@
 vocab_path: /home/tommaso/Fragment-based-generation/data/vocab.txt
 operation_path: /home/tommaso/Fragment-based-generation/data/operations.txt
-train_path: /home/tommaso/Fragment-based-generation/data/toyset.txt
-num_workers: 12
-num_operations: 500
-num_iters: 500
+train_path: /home/tommaso/Fragment-based-generation/data/zinc250k/zinc250k.txt
+num_workers: 6
+num_operations: 10000000000000
+num_iters: 10000000000000
 min_frequency: 50
-mp_thd: 2
+mp_thd: 0.5
