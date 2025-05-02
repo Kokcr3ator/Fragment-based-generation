@@ -3,6 +3,7 @@ import networkx as nx
 import rdkit.Chem as Chem
 from rdkit import Chem
 from rdkit.Chem import AllChem
+from rdkit.Chem.rdchem import BondType
 
 def merge_nodes(graph: nx.Graph, node1: int, node2: int) -> None:
     neighbors = [n for n in graph.neighbors(node2)]
@@ -134,4 +135,24 @@ def label_attachment(smiles: str) -> str:
             mol.GetAtomWithIdx(idx).SetIsotope(len(orders))
     return Chem.MolToSmiles(mol)
 
+
+def bond_type_2_bond_token(bondtype: BondType) -> str:
+    if bondtype == BondType.SINGLE:   return "(*)"
+    if bondtype == BondType.DOUBLE:   return "(=)"
+    if bondtype == BondType.TRIPLE:   return "(#)"
+    if bondtype == BondType.AROMATIC: return "(:)"
+    if bondtype == 'INTERNAL' :       return "(-)"
+    raise ValueError("unknown bond")
+
+def bond_token_2_bond_type(bond_token: str) -> BondType:
+    if  bond_token == "(*)": return BondType.SINGLE
+    elif bond_token == "(=)": return BondType.DOUBLE
+    elif bond_token == "(#)": return BondType.TRIPLE
+    elif bond_token == "(:)": return BondType.AROMATIC
+    elif bond_token == "(-)": return 'INTERNAL'
+    else:
+        raise ValueError(f"Unknown bond token: {bond_token}")
+    
+
+ 
 
