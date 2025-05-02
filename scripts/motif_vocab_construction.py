@@ -1,7 +1,4 @@
 import multiprocessing as mp
-import os
-import os.path as path
-import pickle
 from collections import Counter
 from datetime import datetime
 from functools import partial
@@ -21,8 +18,6 @@ def apply_operations(batch: List[Tuple[int, str]]) -> Counter:
     with tqdm(total = len(batch), desc=f"Processing {pos}", position=pos-1, ncols=80, leave=False) as pbar:
         for idx, smi in batch:
             mol = MolGraph(smi, tokenizer="motif")
-            # with open(path.join(mols_pkl_dir, f"{idx}.pkl"), "wb") as f:
-            #     pickle.dump(mol, f)
             vocab = vocab + Counter(mol.motifs)
             pbar.update()
     return vocab

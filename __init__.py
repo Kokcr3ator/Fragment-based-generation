@@ -1,2 +1,2 @@
 from .core.mol_graph import MolGraph
-from .core.tokenizer import Tokenizer
+from .core.tokenizer.tokenizer import Tokenizer
