@@ -1,20 +1,8 @@
-"""For molecular graph processing."""
-from typing import List, Optional, Set, Tuple
-
+from typing import Set, Tuple
 import networkx as nx
 import rdkit.Chem as Chem
-
 from .utils import (fragment2smiles, get_conn_list, graph2smiles, smiles2mol, merge_nodes)
-from .vocab import MotifVocab
 from config import config
-from .vocab import (ATOM_SYMBOL_VOCAB, 
-                    ATOM_ISAROMATIC_VOCAB, 
-                    ATOM_FORMALCHARGE_VOCAB,
-                    ATOM_NUMEXPLICITHS_VOCAB,
-                    ATOM_NUMIMPLICITHS_VOCAB,
-                    ATOM_FEATURES,
-                    BOND_LIST,
-                    BOND_VOCAB)
 
 class MolGraph(object):
     _vocab_loaded = False
@@ -23,7 +11,6 @@ class MolGraph(object):
 
     @classmethod
     def load_operations(cls, operation_path: str = config['operation_path'] , num_operations: int = config['num_operations']):
-
         if not cls._operations_loaded:
             cls.NUM_OPERATIONS = num_operations
             with open(operation_path) as f:
@@ -34,10 +21,10 @@ class MolGraph(object):
     @classmethod
     def load_vocab(cls, vocab_path:str = config['vocab_path']):
         if not cls._vocab_loaded:
-            with open(vocab_path) as f:
-                pair_list = [line.strip("\r\n").split() for line in f]
-            cls.MOTIF_VOCAB = MotifVocab(pair_list)
-            cls.MOTIF_LIST = cls.MOTIF_VOCAB.motif_smiles_list
+            with open(vocab_path, 'r') as f:
+                # each line: "<index> <smiles>"
+                cls.INDEX_2_MOTIF = {i: line.split()[1].strip() for i, line in enumerate(f)}
+                cls.MOTIF_2_INDEX = {v: k for k, v in cls.INDEX_2_MOTIF.items()}
             cls._vocab_loaded = True
     
     @staticmethod
@@ -81,7 +68,6 @@ class MolGraph(object):
             atom1 = bond.GetBeginAtom().GetIdx()
             atom2 = bond.GetEndAtom().GetIdx()
             graph[atom1][atom2]['bondtype'] = bond.GetBondType()
-            graph[atom1][atom2]['label'] = BOND_VOCAB[bond.GetBondType()]
 
         return graph
     
@@ -127,7 +113,6 @@ class MolGraph(object):
                 mol_graph.nodes[conn1]['anchor'] = node1
                 mol_graph.nodes[conn1]['bpe_node'] = bpe_node1
                 mol_graph[node1][conn1]['bondtype'] = bondtype = mol_graph[node1][node2]['bondtype']
-                mol_graph[node1][conn1]['label'] = mol_graph[node1][node2]['label']
                 merging_graph.nodes[bpe_node1]['atom_indices'].add(conn1)
                 mol_graph.nodes[conn1]['label'] = MolGraph.get_atom_features(IsConn=True, BondType=bondtype)
                 
@@ -137,7 +122,6 @@ class MolGraph(object):
                 mol_graph.nodes[conn2]['anchor'] = node2
                 mol_graph.nodes[conn2]['bpe_node'] = bpe_node2
                 mol_graph[node2][conn2]['bondtype'] = bondtype = mol_graph[node1][node2]['bondtype']
-                mol_graph[node2][conn2]['label'] = mol_graph[node1][node2]['label']
                 merging_graph.nodes[bpe_node2]['atom_indices'].add(conn2)
                 mol_graph.nodes[conn2]['label'] = MolGraph.get_atom_features(IsConn=True, BondType=bondtype)
 
@@ -166,7 +150,7 @@ class MolGraph(object):
 
             bpe_graph.nodes[node]['conn_list'] = conn_list
             bpe_graph.nodes[node]['ordermap'] = ordermap
-            bpe_graph.nodes[node]['label'] = MolGraph.MOTIF_VOCAB[ bpe_graph.nodes[node]['motif'] ]
+            bpe_graph.nodes[node]['label'] = MolGraph.MOTIF_2_INDEX[ bpe_graph.nodes[node]['motif'] ]
             bpe_graph.nodes[node]['num_atoms'] = len(atom_indices)
 
         for node1, node2 in bpe_graph.edges:
@@ -189,54 +173,48 @@ class MolGraph(object):
     @staticmethod
     def get_atom_features(atom: Chem.rdchem.Atom=None, IsConn: bool=False, BondType: Chem.rdchem.BondType=None) -> Tuple[int, int, int, int, int]:
         if IsConn:
-            Symbol, FormalCharge, NumExplicitHs, NumImplicitHs = 0, 0, 0, 0       
+            Symbol, FormalCharge, NumExplicitHs = '*', '*', '*'      
             IsAromatic = True if BondType == Chem.rdchem.BondType.AROMATIC else False
-            IsAromatic = ATOM_ISAROMATIC_VOCAB[IsAromatic]
+            IsAromatic = IsAromatic
         else:
-            Symbol = ATOM_SYMBOL_VOCAB[atom.GetSymbol()]
-            IsAromatic = ATOM_ISAROMATIC_VOCAB[atom.GetIsAromatic()]
-            FormalCharge = ATOM_FORMALCHARGE_VOCAB[atom.GetFormalCharge()]
-            NumExplicitHs = ATOM_NUMEXPLICITHS_VOCAB[atom.GetNumExplicitHs()]
-            NumImplicitHs = ATOM_NUMIMPLICITHS_VOCAB[atom.GetNumImplicitHs()]
-        return (Symbol, IsAromatic, FormalCharge, NumExplicitHs, NumImplicitHs)
+            Symbol = atom.GetSymbol()
+            IsAromatic = atom.GetIsAromatic()
+            FormalCharge = atom.GetFormalCharge()
+            NumExplicitHs = atom.GetNumExplicitHs()
+        return (Symbol, IsAromatic, FormalCharge, NumExplicitHs)
 
     @staticmethod
     def motif_to_graph(smiles: str,
-                    motif_list: Optional[List[str]] = None
-                    ) -> Tuple[nx.Graph, List[int], List[int]]:
+                    ) -> nx.Graph:
+        """
+        Converts a connection aware motif SMILES string to a graph. The node indices correspond to the RDkit canonical ranking.
+        This graph also contains the connection sites and for each connection site the corresponding anchor atom.
+        """
         motif = smiles2mol(smiles, sanitize= False)
         graph = nx.Graph(Chem.rdmolops.GetAdjacencyMatrix(motif))
+        ranks = list(Chem.CanonicalRankAtoms(motif, includeIsotopes=False, breakTies=True))
+        rank_mapping = {idx: rank for idx, rank in enumerate(ranks)}
         
         for atom in motif.GetAtoms():
             idx = atom.GetIdx()
             graph.nodes[idx]['smarts'] = atom.GetSmarts()
             graph.nodes[idx]['motif']  = smiles
+            # if the atom is a connection site, we set the anchor atom
             if atom.GetSymbol() == '*':
-                bondtype = atom.GetBonds()[0].GetBondType()
-                graph.nodes[idx]['dummy_bond_type'] = bondtype
-                graph.nodes[idx]['label'] = MolGraph.get_atom_features(IsConn=True,
-                                                                        BondType=bondtype)
+
+                neighbors = list(graph.neighbors(idx))
+                if len(neighbors) != 1:
+                    raise ValueError(f"A connection site should have only one neighbor, but got {len(neighbors)}")
+                # the anchor is mapped with the ranking since after this step the graph is relabeled given the ranking
+                graph.nodes[idx]['anchor'] = rank_mapping[neighbors[0]]
             else:
                 graph.nodes[idx]['label'] = MolGraph.get_atom_features(atom)
 
-        ranks = list(Chem.CanonicalRankAtoms(motif, includeIsotopes=False, breakTies=True))
-
-        mapping = {}
-        for idx, rank in enumerate(ranks):
-            graph.nodes[idx]['rank'] = rank
-            mapping[idx] = rank
-
-        for idx in mapping:
-            graph.nodes[idx]['orig_idx'] = idx
-
-        dummy_idxs = [atom.GetIdx() for atom in motif.GetAtoms() if atom.GetSymbol() == '*']
-        dummy_idxs.sort(key=lambda idx: ranks[idx])
+        # add all the internal bonds
         for bond in motif.GetBonds():
             i, j = bond.GetBeginAtom().GetIdx(), bond.GetEndAtom().GetIdx()
             graph[i][j]['bondtype'] = bond.GetBondType()
-            graph[i][j]['label']    = BOND_VOCAB[bond.GetBondType()]
 
-        graph = nx.relabel_nodes(graph, mapping, copy=True)
-        dummy_idxs = [mapping[i] for i in dummy_idxs]
+        graph = nx.relabel_nodes(graph, rank_mapping, copy=True)
 
-        return graph, dummy_idxs, ranks
+        return graph

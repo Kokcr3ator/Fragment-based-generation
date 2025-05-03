@@ -3,86 +3,79 @@ import networkx as nx
 from rdkit import Chem
 from functools import lru_cache
 from typing import Dict
-from core.vocab import (
-        INV_ATOM_SYMBOL_VOCAB,
-        INV_ATOM_ISAROMATIC_VOCAB,
-        INV_ATOM_FORMALCHARGE_VOCAB,
-        INV_ATOM_NUMEXPLICITHS_VOCAB,
-        )
 
 # ----------------------------------------------------------------------------
-# Molecule reconstruction from star graph (WIP: reconstruction directly from fragment graph)
+# Molecule reconstruction from fragment graph
 # ----------------------------------------------------------------------------
 
 class MoleculeReconstructor:
-    """Rebuild an RDKit Mol (SMILES) from a star graph."""
+    """Rebuild an RDKit Mol (SMILES) from the fragment graph."""
 
     def __init__(self, vocab: Dict[int, str]):
         self.vocab = vocab
 
     @lru_cache(maxsize=None)
     def _motif_graph(self, motif_smiles: str) -> nx.Graph:
-        return MolGraph.motif_to_graph(motif_smiles)[0]
+        return MolGraph.motif_to_graph(motif_smiles)
     
-    # this is dogshit, but it works. i'll work on it later
-    def from_star_graph(self, star_graph: nx.Graph) -> nx.Graph:
+    def from_fragment_graph(self, fragment_graph: nx.MultiDiGraph) -> nx.Graph:
         """
-        From the star graph, builds the graph where each node is an atom and the edges are the bonds between the atoms.
-        """
-        fragments = {}
+        Reconstructs the atom graph from the fragment graph. The atom graph is the graph where each node is an atom
+        and the edges are the bonds between them.
+        How it works:
+        1. For each fragment in the fragment graph, build the corresponding motif graph. The node indices in the motif graph
+           are the internal rank of the atoms in the fragment.
 
-        total_len = 0
-        for node in star_graph.nodes:
-            label = '_'.join(node.split('_')[:2])
-            motif_idx = int(label.split('_')[0])
-            if label not in fragments:
-                fragments[label] = None
-                motif_smiles = self.vocab[motif_idx]
-                fragment_graph = self._motif_graph(motif_smiles)
-                total_len += fragment_graph.number_of_nodes()      
-        offset = total_len
-        offsets = {}
-        for fragment in star_graph.nodes:
-            label = '_'.join(fragment.split('_')[:2])
-            motif_idx = int(label.split('_')[0])
-            if label not in offsets:
-                fragment_graph = MolGraph.motif_to_graph(self.vocab[motif_idx])[0]
-                offsets[label] = offset
-                offset += fragment_graph.number_of_nodes()
-                fragment_graph = nx.relabel_nodes(fragment_graph, lambda n: n + offsets[label] , copy=True)
-                fragments[label] = fragment_graph
-                        
-        fragments_list = list(fragments.values())
-        # union the fragments using union
-        G = fragments_list[0]
-        for i in range(1, len(fragments_list)):
-            G = nx.union(G, fragments_list[i])
-        to_delete = set()
-        for edge in star_graph.edges(data=True):
+        2. The nodes of each motif graph are relabeled to be idx + offset, where offset is a counter of the number total atoms
+           added until now. This is done to perform the union of the motif graphs which need to be disjoint.
+
+        3. fragment2atoms is a dict that maps the the node index of the fragment graph to the node indices of the atoms of the
+           corresponding motif graph. This is done in order to retrieve the edges between the fragments and add them to the atom graph.
+        
+        4. Add the edges between the fragments to the atom graph.
+
+        5. Remove the connection sites from the atom graph.
+        """
+
+        fragment2atoms = {}
+        offset = 0
+        atom_graph = nx.Graph()
+        for fragment in fragment_graph.nodes:
+            fragment_label = fragment_graph.nodes[fragment]['label']
+            motif_graph = self._motif_graph(self.vocab[fragment_label])
+
+            n_atoms = motif_graph.number_of_nodes()
+            fragment2atoms[fragment] = list(range(offset, offset + n_atoms))
+            motif_graph = nx.relabel_nodes(motif_graph, lambda n: n + offset, copy=True)
+            offset += n_atoms
+            atom_graph = nx.union(atom_graph, motif_graph)
+
+        connection_sites = set()
+        for edge in fragment_graph.edges(data=True):           
             source, dest, data = edge
-            source_label = '_'.join(source.split('_')[:2])
-            dest_label = '_'.join(dest.split('_')[:2])
-            
-            source_star = int(source.split('_')[2]) + offsets[source_label]
 
-            source_idx = list(G.neighbors(source_star))
-            assert len(source_idx) == 1, f"Expected exactly one neighbor, got {len(source_idx)}"
-            source_idx = source_idx[0]
-            
-            dest_star = int(dest.split('_')[2]) + offsets[dest_label]
-            dest_idx = list(G.neighbors(dest_star))
-            assert len(dest_idx) == 1, f"Expected exactly one neighbor, got {len(dest_idx)}"
-            dest_idx = dest_idx[0]
-
+            source_rank = data['source_rank']
+            dest_rank = data['dest_rank']
             bondtype = data['bondtype']
-            G.add_edge(source_idx, dest_idx,
-                        bondtype=bondtype
-                        )
-            to_delete.add(source_star)
-            to_delete.add(dest_star)
-        G.remove_nodes_from(to_delete)
-            
-        return G
+
+            source_star_idx = fragment2atoms[source][source_rank]
+            connection_sites.add(source_star_idx)
+            source_anchor = atom_graph.nodes[source_star_idx]['anchor']
+            # the anchor corresponds to the rank of the atom connected to the connection site
+            source_idx = fragment2atoms[source][source_anchor]
+
+            dest_star_idx = fragment2atoms[dest][dest_rank]
+            connection_sites.add(dest_star_idx)
+            dest_anchor = atom_graph.nodes[dest_star_idx]['anchor']
+            dest_idx = fragment2atoms[dest][dest_anchor]
+
+            atom_graph.add_edge(source_idx, dest_idx,
+                                bondtype=bondtype
+                                )
+        # remove the connection sites from the graph
+        atom_graph.remove_nodes_from(connection_sites)
+        return atom_graph
+
     
     def to_smiles(self, atom_graph: nx.Graph) -> str:
         """
@@ -94,10 +87,7 @@ class MoleculeReconstructor:
 
         for node, data in atom_graph.nodes(data=True):
             labels = data['label']
-            symbol = INV_ATOM_SYMBOL_VOCAB[labels[0]]
-            IsAromatic = INV_ATOM_ISAROMATIC_VOCAB[labels[1]]
-            FormalCharge = INV_ATOM_FORMALCHARGE_VOCAB[labels[2]]
-            NumExplicitHs = INV_ATOM_NUMEXPLICITHS_VOCAB[labels[3]]
+            symbol, IsAromatic, FormalCharge, NumExplicitHs =  labels
 
             atom = Chem.Atom(symbol)
             atom.SetFormalCharge(FormalCharge)

@@ -48,59 +48,6 @@ def fragment2smiles(mol: Chem.rdchem.Mol, indices: List[int]) -> str:
 def smarts2atom(smarts: str) -> Chem.rdchem.Atom:
     return Chem.MolFromSmarts(smarts).GetAtomWithIdx(0)
 
-def mol_graph2smiles(graph: nx.Graph, postprocessing: bool=True) -> str:
-    mol = Chem.RWMol()
-    graph = nx.convert_node_labels_to_integers(graph)
-    node2idx = {}
-    for node in graph.nodes:
-        idx = mol.AddAtom(smarts2atom(graph.nodes[node]['smarts']))
-        node2idx[node] = idx
-    for node1, node2 in graph.edges:
-        mol.AddBond(node2idx[node1], node2idx[node2], graph[node1][node2]['bondtype'])
-    mol = mol.GetMol()
-    smiles = Chem.MolToSmiles(mol)
-    return postprocess(smiles) if postprocessing else smiles
- 
-def postprocess(smiles: str) -> str:
-    try:
-        mol = Chem.MolFromSmiles(smiles)
-        return Chem.MolToSmiles(mol)
-    except:
-        mol = Chem.MolFromSmiles(smiles, sanitize=False)
-        for atom in mol.GetAtoms():
-            if atom.GetIsAromatic() and not atom.IsInRing():
-                atom.SetIsAromatic(False)   
-        for bond in mol.GetBonds():
-            if bond.GetBondType() == Chem.rdchem.BondType.AROMATIC:
-                if not (bond.GetBeginAtom().GetIsAromatic() and bond.GetEndAtom().GetIsAromatic()):
-                    bond.SetBondType(Chem.rdchem.BondType.SINGLE)
-        
-        for _ in range(100):
-            problems = Chem.DetectChemistryProblems(mol)
-            flag = False
-            for problem in problems:
-                if problem.GetType() =='KekulizeException':
-                    flag = True
-                    for atom_idx in problem.GetAtomIndices():
-                        mol.GetAtomWithIdx(atom_idx).SetIsAromatic(False)
-                    for bond in mol.GetBonds():
-                        if bond.GetBondType() == Chem.rdchem.BondType.AROMATIC:
-                            if not (bond.GetBeginAtom().GetIsAromatic() and bond.GetEndAtom().GetIsAromatic()):
-                                bond.SetBondType(Chem.rdchem.BondType.SINGLE)
-            mol = Chem.MolFromSmiles(Chem.MolToSmiles(mol), sanitize=False)
-            if flag: continue
-            else: break
-        
-        smi = Chem.MolToSmiles(mol)
-        mol = Chem.MolFromSmiles(smi, sanitize=False)
-        try:
-            Chem.SanitizeMol(mol)
-        except:
-            print(f"{smiles} not valid")
-            return "CC"
-        smi = Chem.MolToSmiles(mol)
-        return smi
-
 def get_conn_list(motif: Chem.rdchem.Mol, use_Isotope: bool=False, symm: bool=False) -> Tuple[List[int], Dict[int, int]]:
 
     ranks = list(Chem.CanonicalRankAtoms(motif, includeIsotopes=False, breakTies=True))
@@ -120,21 +67,6 @@ def get_conn_list(motif: Chem.rdchem.Mol, use_Isotope: bool=False, symm: bool=Fa
                 cur_order = order
                 conn_atoms.append(idx)
     return conn_atoms, ordermap
-
-
-def label_attachment(smiles: str) -> str:
-
-    mol = Chem.MolFromSmiles(smiles)
-    ranks = list(Chem.CanonicalRankAtoms(mol, breakTies=True))
-    dummy_atoms = [(atom.GetIdx(), ranks[atom.GetIdx()])for atom in mol.GetAtoms() if atom.GetSymbol() == '*']
-    dummy_atoms.sort(key=lambda x: x[1])
-    orders = []
-    for (idx, order) in dummy_atoms:
-        if order not in orders:
-            orders.append(order)
-            mol.GetAtomWithIdx(idx).SetIsotope(len(orders))
-    return Chem.MolToSmiles(mol)
-
 
 def bond_type_2_bond_token(bondtype: BondType) -> str:
     if bondtype == BondType.SINGLE:   return "(*)"

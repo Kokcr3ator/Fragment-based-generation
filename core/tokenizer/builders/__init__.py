@@ -1,3 +1,3 @@
-from .fragment import FragmentGraphBuilder, StarGraphBuilder
+from .fragment import FragmentGraphBuilder
 from .reconstructor import MoleculeReconstructor
 from .serializer import SequenceSerializer

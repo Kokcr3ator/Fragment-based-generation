@@ -3,7 +3,7 @@ from typing import Tuple, List, Any, Union
 from pathlib import Path
 from config import config
 from .vocab_loader import VocabLoader
-from .builders import FragmentGraphBuilder, StarGraphBuilder, SequenceSerializer, MoleculeReconstructor
+from .builders import FragmentGraphBuilder, SequenceSerializer, MoleculeReconstructor
 
 
 NodeToken = Tuple[int, int]
@@ -31,7 +31,6 @@ class Tokenizer:
         VocabLoader.load_operations(Path(operation_path), num_operations)
 
         self._frag_builder = FragmentGraphBuilder()
-        self._star_builder = StarGraphBuilder()
         self._serializer = SequenceSerializer()
         self._reconstructor = MoleculeReconstructor(vocab)
 
@@ -44,7 +43,6 @@ class Tokenizer:
     def detokenize(self, seq: GraphSequence) -> str:
         """GraphSequence to SMILES"""
         fg = self._serializer.from_sequence(seq)
-        star = self._star_builder.build(fg)
-        atom_graph = self._reconstructor.from_star_graph(star)
+        atom_graph = self._reconstructor.from_fragment_graph(fg)
         smiles = self._reconstructor.to_smiles(atom_graph)
         return smiles
