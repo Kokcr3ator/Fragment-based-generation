@@ -20,19 +20,23 @@ python scripts/merging.py
 python scripts/motif_vocab_construction.py
 ```
 
-### Step 3: Tokenize a Molecule
+### Step 3: Tokenize a molecule into a sequence
 
 ```python
 from core.tokenizer import Tokenizer
 
 tokenizer = Tokenizer()
-smi = 'COc1ccc(C2=NN(C(=O)COC(=O)c3c(C)noc3N)[C@H](c3ccco3)C2)cc1'
-star_graph = tokenizer.tokenize(smi)
+smi = 'COC(=O)c1c(NC(=O)c2ccc(OC)cc2)sc(C)c1C'
+sequence = tokenizer.tokenize(smi)
+print(sequence)
+```
+```
+['(SOG)', (1077, 0), (1191, 1), (1, 0, 0, 1, '(*)'), (1699, 2), (0, 2, 0, 0, '(*)'), '(EOG)']
 ```
 
-### To go back from the star_graph to the smiles, run
+### To go back from the sequence to the smiles, run
 ```python
-reconstructed_smi = tokenizer.detokenize(star_graph)
+reconstructed_smi = tokenizer.detokenize(sequence)
 ```
 
 ## Configuration
