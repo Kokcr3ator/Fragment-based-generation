@@ -1,8 +1,10 @@
 vocab_path: /home/tommaso/Fragment-based-generation/data/vocab.txt
 operation_path: /home/tommaso/Fragment-based-generation/data/operations.txt
 train_path: /home/tommaso/Fragment-based-generation/data/toyset.txt
+config_path: /home/tommaso/Fragment-based-generation/config/
 num_workers: 2
 num_operations: 500
 num_iters: 500
 min_frequency: 20
 mp_thd: 0.5
+tokenized_mols_path: '/home/tommaso/Fragment-based-generation/tokenized_sequences.txt'

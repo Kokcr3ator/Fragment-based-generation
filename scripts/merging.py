@@ -268,12 +268,12 @@ def merging_operation_learning(
 def parse_arguments():
     parser = argparse.ArgumentParser()
     
-    parser.add_argument('--train_path', type=str, default=config['train_path'])
-    parser.add_argument('--operation_path', type=str, default=config['operation_path'])
-    parser.add_argument('--num_iters', type=int, default=config['num_iters'])
-    parser.add_argument('--min_frequency', type=int, default=config['min_frequency'])
-    parser.add_argument('--num_workers', type=int, default=config['num_workers'])
-    parser.add_argument('--mp_thd', type=float, default=config['mp_thd'])
+    parser.add_argument('--train_path', type=str, default=config.tokenization_config['train_path'])
+    parser.add_argument('--operation_path', type=str, default=config.tokenization_config['operation_path'])
+    parser.add_argument('--num_iters', type=int, default=config.tokenization_config['num_iters'])
+    parser.add_argument('--min_frequency', type=int, default=config.tokenization_config['min_frequency'])
+    parser.add_argument('--num_workers', type=int, default=config.tokenization_config['num_workers'])
+    parser.add_argument('--mp_thd', type=float, default=config.tokenization_config['mp_thd'])
 
     return parser.parse_args()
 

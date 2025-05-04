@@ -1,7 +1,6 @@
 import networkx as nx
 from collections import deque
 from typing import Tuple, List, Union
-from config import config
 from core.utils import bond_type_2_bond_token, bond_token_2_bond_type
 
 NodeToken = Tuple[int, int]

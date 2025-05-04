@@ -1,0 +1,6 @@
+vocab_size: 1901
+max_node_id: 9
+max_rank: 6
+max_seq_len: 24
+num_edge_types: 4
+node_vocab_size: 1882

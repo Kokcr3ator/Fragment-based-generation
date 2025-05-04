@@ -10,7 +10,7 @@ class MolGraph(object):
     
 
     @classmethod
-    def load_operations(cls, operation_path: str = config['operation_path'] , num_operations: int = config['num_operations']):
+    def load_operations(cls, operation_path: str = config.tokenization_config['operation_path'] , num_operations: int = config.tokenization_config['num_operations']):
         if not cls._operations_loaded:
             cls.NUM_OPERATIONS = num_operations
             with open(operation_path) as f:
@@ -19,7 +19,7 @@ class MolGraph(object):
             cls._operations_loaded = True
 
     @classmethod
-    def load_vocab(cls, vocab_path:str = config['vocab_path']):
+    def load_vocab(cls, vocab_path:str = config.tokenization_config['vocab_path']):
         if not cls._vocab_loaded:
             with open(vocab_path, 'r') as f:
                 # each line: "<index> <smiles>"

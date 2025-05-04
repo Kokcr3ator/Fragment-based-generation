@@ -179,5 +179,3 @@ test_scaffolds.txt
 # moses.txt
 
 *.ipynb
-
-model/*

@@ -66,11 +66,11 @@ def motif_vocab_construction(
 def parse_arguments():
     parser = argparse.ArgumentParser()
     
-    parser.add_argument('--train_path', type=str, default=config['train_path'])
-    parser.add_argument('--vocab_path', type=str, default=config['vocab_path'])
-    parser.add_argument('--operation_path', type=str, default=config['operation_path'])
-    parser.add_argument('--num_workers', type=int, default=config['num_workers'])
-    parser.add_argument('--num_operations', type=int, default=config['num_operations'])
+    parser.add_argument('--train_path', type=str, default=config.tokenization_config['train_path'])
+    parser.add_argument('--vocab_path', type=str, default=config.tokenization_config['vocab_path'])
+    parser.add_argument('--operation_path', type=str, default=config.tokenization_config['operation_path'])
+    parser.add_argument('--num_workers', type=int, default=config.tokenization_config['num_workers'])
+    parser.add_argument('--num_operations', type=int, default=config.tokenization_config['num_operations'])
 
     return parser.parse_args()
 
