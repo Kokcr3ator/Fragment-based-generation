@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="924a8c60-7e7e-4509-abd6-731876330080" name="scratch">
+        <fileTransfer rootFolder="/scratch/uceeosm" accessType="SFTP" host="london.ee.ucl.ac.uk" port="22" sshConfigId="5d1fdec7-a683-45b5-b800-3fccf907a57d" sshConfig="uceeosm@london.ee.ucl.ac.uk:22 password">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>
