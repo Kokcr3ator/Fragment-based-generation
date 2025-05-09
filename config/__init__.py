@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from box import Box
 
 
-TOKENIZATION_CONFIG_PATH = Path(__file__).parent / "tokenization_config.yaml"
+SEQUENCING_CONFIG_PATH = Path(__file__).parent / "sequencing_config.yaml"
 MODEL_CONFIG_PATH = Path(__file__).parent / "model_config.yaml"
 DATASET_CONFIG_PATH = Path(__file__).parent / "dataset_config.yaml"
 
@@ -20,8 +20,8 @@ def load_config(path):
 class Config:
     @property
     @lru_cache()
-    def tokenization_config(self):
-        return load_config(TOKENIZATION_CONFIG_PATH)
+    def sequencing_config(self):
+        return load_config(SEQUENCING_CONFIG_PATH)
 
     @property
     @lru_cache()

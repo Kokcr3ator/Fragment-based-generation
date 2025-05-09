@@ -1,2 +1,2 @@
 from .mol_graph import MolGraph
-from .tokenizer.tokenizer import Tokenizer
+from .graph_sequencer import GraphSequencer

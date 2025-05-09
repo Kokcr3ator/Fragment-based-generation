@@ -1,157 +1,175 @@
 import torch
 from torch.utils.data import Dataset
-from typing import List, Union, Dict
-import ast
-from core.tokenizer.vocab_loader import VocabLoader
 from config import config
-from core.tokenizer.tokenizer import Tokenizer
-import re
 import os
-import logging
 import json
-
+from .tokenizer import Tokenizer
 
 class GraphDataset(Dataset):
-    def __init__(self, tokenized_mol_path: str = config.tokenization_config['tokenized_mols_path']):
-        """
-        Args:
-            path: Path to .txt file with 1 sequence per line
-            max_seq_len: Maximum number of tokens per sequence
-        """
-        self.tokenized_mol_path = tokenized_mol_path
-        self.node_vocab = VocabLoader.load_vocab(config.tokenization_config['vocab_path'], return_vocab= True)
-        # the node vocab is the same vocab used for the nodes so the mapping is node_label : node_label
-        self.node_vocab = {idx:idx for idx,_ in self.node_vocab.items()}
 
-    def build(self) -> None:
-        if not os.path.isfile(self.tokenized_mol_path):
-            self._tokenize()
-            logging.info(f"Tokenized molecules and saved to {self.tokenized_mol_path}")
-
-        self.max_node_id = self._calculate_max_node_id()
-        self.max_rank = self._calculate_max_rank()
-        self.max_seq_len = self._calculate_max_seq_len()
-
-        self.vocab = self.node_vocab.copy()
-        self.node_id_vocab = {}
-        self.rank_vocab = {}
-
-        special_tokens = ['(SOG)', '(EOG)', '(PAD)']
-        self.special_tokens_vocab = {}
-
-        for idx, token in zip(range(len(self.vocab),len(self.vocab) + len(special_tokens)), special_tokens):
-            self.vocab[idx] = token
-            self.node_vocab[token] = idx
-            self.special_tokens_vocab[token] = idx
-
-        for idx, node_id in zip(range(len(self.vocab),len(self.vocab) + self.max_node_id), range(self.max_node_id)):
-            self.vocab[idx] = node_id
-            self.node_id_vocab[node_id] = idx
-        
-        for idx, rank in zip(range(len(self.vocab),len(self.vocab) + self.max_rank), range(self.max_node_id)):
-            self.vocab[idx] = rank
-            self.rank_vocab[rank] = idx
-
-        bond_labels= ['(*)', '(=)', '(#)', '(:)']
-        self.bond_vocab = {}
-
-        for idx, bond in zip(range(len(self.vocab),len(self.vocab) + len(bond_labels)), bond_labels):
-            self.vocab[idx] = bond
-            self.bond_vocab[bond] = idx
-
-        self.inv_node_id_vocab = {v: k for k, v in self.node_id_vocab.items()}
-        self.inv_node_vocab    = {v: k for k, v in self.node_vocab.items()}
-        self.inv_rank_vocab    = {v: k for k, v in self.rank_vocab.items()}
-        self.inv_bond_vocab    = {v: k for k, v in self.bond_vocab.items()}
-
+    def __init__(self, graph_sequences_path: str, vocab_path: str = os.path.join(config.sequencing_config['config_path'], 'vocab.json')):
+        self.vocab_path = vocab_path
+        self.vocab = self._load_vocab(vocab_path)
+        self.tokenizer = Tokenizer(vocab_path)
+        self.graph_sequences_path = graph_sequences_path
+        self._build()
         self._output_config()
-        logging.info(f"Dataset config saved to {self.dataset_config_path}")
-        self._output_vocab()
-        logging.info(f"Vocabulary saved to {self.vocab_path}")
-        
-    def _tokenize(self) -> None:
 
-        train_path = config.tokenization_config['train_path']
-        with open(train_path, 'r') as f:
-            lines = f.readlines()
-            smiles_list = [line.strip() for line in lines]
-        tokenizer = Tokenizer()
-        tokenized_mols = tokenizer.tokenize(smiles_list)
-        with open(self.tokenized_mol_path, 'w') as f:
-            for seq in tokenized_mols:
-                for tok in seq:
-                    f.write(f"{tok};")
-                # delete the last semicolon
-                f.seek(f.tell() - 1, 0)
-                f.truncate()
-                f.write("\n")
+    @staticmethod
+    def _load_vocab(vocab_path: str) -> None:
+        """
+        Load the vocabulary from a JSON file.
+        """
+        if not os.path.exists(vocab_path):
+            raise FileNotFoundError(f"Vocabulary file not found: {vocab_path}")
+        with open(vocab_path, 'r') as f:
+            vocab = json.load(f)
 
-    def _calculate_max_node_id(self) -> int:
-        pair_pattern = re.compile(r'\(\s*(\d+)\s*,\s*(\d+)\s*\)')
+        return vocab
 
-        with open(self.tokenized_mol_path, 'r', encoding='utf-8') as f:
-            text = f.read()
+    def _calculate_stats(self) -> None:
+        """
+        Calculate statistics for the dataset (these are used to build the architecture of the model).
+        """
+        ranks = [int(k.split("_")[1]) for k in self.vocab if k.startswith("rank_")]
+        fragments = [int(k.split("_")[1]) for k in self.vocab if k.startswith("frag_")]
+        node_ids = [int(k.split("_")[1]) for k in self.vocab if k.startswith("node_")]
+        edge_types = ["(:)", "(=)", "(*)", "(#)"]
+        special_tokens = ["(PAD)", "(SOG)", "(EOG)"]
+        self.stats = {}
+        self.stats['max_rank'] = max(ranks)
+        self.stats['max_fragment'] = max(fragments)
+        self.stats['max_node_id'] = max(node_ids)
+        self.stats['num_edge_types'] = len(edge_types)
+        self.stats['num_special_tokens'] = len(special_tokens)
+        self.stats['max_num_nodes'] = max([len(seq) for seq in self.node_seqs])
+        self.stats['max_num_edges'] = max([len(seq) for seq in self.edge_seqs])
+        self.stats['max_seq_len'] = max([len(seq) for seq in self.routing_seqs])
+        self.stats['vocab_size'] = len(self.vocab)
 
-        # Find all (label, id) pairs
-        pairs = pair_pattern.findall(text)
-        if not pairs:
-            raise ValueError("No two‐element tuples found in the file.")
+    def _preprocess_one_sequence(self, tokenized_seq: list):
+        node_seq = []
+        edge_seq = []
+        routing_seq = []
+        for token in tokenized_seq:
+            if len(token) == 2:
+                node_seq.append(token)
+                routing_seq.append(0)
 
-        node_ids = [int(node_id) for _, node_id in pairs]
-
-        return max(node_ids)
+            elif len(token) == 5:
+                edge_seq.append(token)
+                routing_seq.append(1)
+        return node_seq, edge_seq, routing_seq
     
-    def _calculate_max_seq_len(self) -> int:
-        with open(self.tokenized_mol_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-            max_len = max(len(line.split(';')) for line in lines)
-        return max_len
-    
-    def _calculate_max_rank(self) -> int:
-        edge_pattern = re.compile(
-        r"\(\s*(\d+)\s*,\s*"    # node_id 
-        r"(\d+)\s*,\s*"         # dest_id 
-        r"(\d+)\s*,\s*"         # source_rank
-        r"(\d+)\s*,\s*"
-        r"'[^']*'\s*"           # edge type
-        r"\)"
-        )
-
-        with open(self.tokenized_mol_path, 'r', encoding='utf-8') as f:
-            text = f.read()
-
-        matches = edge_pattern.findall(text)
-        if not matches:
-            raise ValueError("No five‐element edge tuples found in the file.")
-
-        source_ranks = [int(src) for _, _, src, _ in matches]
-        dest_ranks   = [int(dst) for _, _, _, dst in matches]
-
-        max_source = max(source_ranks)
-        max_dest   = max(dest_ranks)
-        overall_max = max(max_source, max_dest)
-        return overall_max
-
-    def _parse_sequence(self, line: str) -> List[Union[str, tuple]]:
-        return list(ast.literal_eval("[" + line + "]"))
-
     def _output_config(self) -> None:
-        dataset_config  = {
-            "vocab_size": len(self.vocab),
-            "max_node_id": self.max_node_id,
-            "max_rank": self.max_rank,
-            "max_seq_len": self.max_seq_len,
-            "num_edge_types": len(self.bond_vocab),
-            "node_vocab_size": len(self.node_vocab),
-        }
-        # write to config yaml file
-        config_path = config.tokenization_config['config_path']
+        config_path = config.sequencing_config['config_path']
         self.dataset_config_path = os.path.join(config_path, 'dataset_config.yaml')
         with open(self.dataset_config_path, 'w') as f:
-            for key, value in dataset_config.items():
+            for key, value in self.stats.items():
                 f.write(f"{key}: {value}\n")
+        
+    def _build(self) -> None:
+        """
+        Build the dataset by loading the vocabulary and calculating statistics.
+        """
+        with open(self.graph_sequences_path, 'r') as f:
+            seqs = [line.strip() for line in f]
+        tokenized_seqs = self.tokenizer(seqs)
+        self.node_seqs, self.edge_seqs, self.routing_seqs = zip(*[self._preprocess_one_sequence(seq) for seq in tokenized_seqs])
+        del tokenized_seqs
+        self._calculate_stats()
 
-    def _output_vocab(self) -> None:
-        self.vocab_path = os.path.join(config.tokenization_config['config_path'], 'vocab.json')
-        with open(self.vocab_path, 'w') as f:
-            json.dump(self.vocab, f, indent=2)
+    def __len__(self):
+        return len(self.node_seqs)
+
+    def __getitem__(self, idx):
+        return (self.node_seqs[idx], self.edge_seqs[idx], self.routing_seqs[idx])
+
+def collate_fn(batch):
+    PAD = 0
+    ROUT_PAD = config.model_config.rout_PAD_token
+    node_seqs, edge_seqs, routing_seqs = zip(*batch)
+    max_n_nodes_per_seq = config.dataset_config['max_num_nodes']
+    max_n_edges_per_seq = config.dataset_config['max_num_edges']
+    max_routing_seq_len = max_n_nodes_per_seq + max_n_edges_per_seq
+    nodes = [torch.LongTensor(seq) for seq in node_seqs]
+    edges = [torch.LongTensor(seq) for seq in edge_seqs]
+    routs = [torch.LongTensor(seq) for seq in routing_seqs]
+    
+    nodes = [torch.cat([x, torch.full((max_n_nodes_per_seq - x.size(0), 2), PAD, dtype=torch.long)]) 
+                     if x.size(0) < max_n_nodes_per_seq else x for x in nodes]
+    
+    edges = [torch.cat([x, torch.full((max_n_edges_per_seq - x.size(0), 5), PAD, dtype=torch.long)])
+                     if x.size(0) < max_n_edges_per_seq else x for x in edges]
+
+    routs = [torch.cat([x, torch.full((max_routing_seq_len - x.size(0),), ROUT_PAD, dtype=torch.long)])
+                     if x.size(0) < max_routing_seq_len else x for x in routs]
+
+    nodes = torch.stack(nodes)
+    edges = torch.stack(edges)
+    routs = torch.stack(routs)
+    routs_next = torch.roll(routs, shifts=-1, dims=1)
+    routs_next[:, -1] = ROUT_PAD
+    node_mask = ~nodes.ne(PAD)
+    edge_mask = ~edges.ne(PAD)
+    rout_mask = ~routs.ne(ROUT_PAD)
+
+
+    return {
+            "nodes": nodes,
+            "edges": edges,
+            "routing": routs,
+            "routing_next": routs_next,
+            "node_mask": node_mask,
+            "edge_mask": edge_mask,
+            "routing_mask": rout_mask,
+            "node_flattened_attention_mask": flattened_attention_mask(max_n_nodes_per_seq*2, 2),
+            "edge_flattened_attention_mask": flattened_attention_mask(max_n_edges_per_seq*5, 5),
+            "seq_flattened_attention_mask": seq_flattened_attention_mask(routs),
+            "seq_flattened_padding_mask": seq_flattened_padding_mask(routs)
+        }
+
+def flattened_attention_mask(seq_len, block_size) -> torch.Tensor:
+    if seq_len % block_size != 0:
+        raise ValueError("seq_len must be a multiple of block_size")
+    mask = torch.zeros((seq_len, seq_len), dtype=torch.bool)
+    for i in range(1 , int(seq_len/block_size)):
+        mask[:(i+1)*block_size, i*block_size:(i+1)*block_size] = True
+    return mask
+
+def seq_flattened_attention_mask(routing):
+    B, _ = routing.shape
+    max_nodes = config.dataset_config['max_num_nodes']
+    max_edges = config.dataset_config['max_num_edges']
+    num_tokens = max_nodes *2 + max_edges * 5
+    mask = torch.zeros((B, num_tokens, num_tokens), dtype=torch.bool)
+    for b in range(B):
+        for i in range(len(routing[b]) -1):
+            # if node
+            if routing[b][i] == 0:
+                block_size = 2
+                mask[b,:(i+2)*block_size, (i+1)*block_size:(i+2)*block_size] = True
+            # if edge
+            elif routing[b][i] == 1:
+                block_size = 5
+                mask[b,:(i+2)*block_size, (i+1)*block_size:(i+2)*block_size] = True
+            
+            else:
+                continue
+    return mask
+
+def seq_flattened_padding_mask(routing):
+    B, _ = routing.shape
+    max_nodes = config.dataset_config['max_num_nodes']
+    max_edges = config.dataset_config['max_num_edges']
+    num_tokens = max_nodes *2 + max_edges * 5
+    mask = torch.ones((B, num_tokens), dtype=torch.bool)
+    for b in range(B):
+        for i in range(len(routing[b])):
+            if routing[b][i] == 0:
+                mask[b, i*2:(i+1)*2] = False
+            elif routing[b][i] == 1:
+                mask[b, i*5:(i+1)*5] = False
+            else:
+                continue
+    return mask

@@ -5,7 +5,7 @@ from config import Config
 
 
 class Router(nn.Module):
-    def __init__(self, config: Config):
+    def __init__(self, d_model: int, hidden_dim: int, n_layers: int):
         """
         Router MLP that outputs logits for node vs. edge prediction.
 
@@ -15,15 +15,17 @@ class Router(nn.Module):
                 - router_hidden_dim (int): hidden dimension for the MLP
         """
         super().__init__()
-        model_config = config.model_config
-        d_model: int = model_config.d_model
-        hidden_dim: int = model_config.router_hidden_dim
+        d_model: int = d_model
+        hidden_dim: int = hidden_dim
+        n_layers: int = n_layers
 
         self.mlp = nn.Sequential(
             nn.Linear(d_model, hidden_dim),
             nn.GELU(),
-            nn.Linear(hidden_dim, 2)  # Two logits: node vs edge
+            *[layer for _ in range(n_layers - 1) for layer in (nn.Linear(hidden_dim, hidden_dim), nn.GELU())],
+            nn.Linear(hidden_dim, 2)
         )
+
 
     def forward(self, hidden_states: Tensor) -> Tensor:
         """

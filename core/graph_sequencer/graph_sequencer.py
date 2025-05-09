@@ -2,7 +2,7 @@ from core import MolGraph
 from typing import Tuple, List, Union
 from pathlib import Path
 from config import config
-from .vocab_loader import VocabLoader
+from .fragment_vocab_loader import VocabLoader
 from .builders import FragmentGraphBuilder, SequenceSerializer, MoleculeReconstructor
 from concurrent.futures import ProcessPoolExecutor
 from tqdm import tqdm
@@ -17,17 +17,14 @@ SpecialToken = str
 GraphSequence = List[Union[SpecialToken, NodeToken, EdgeToken]]
 
 
-# ----------------------------------------------------------------------------
-# Main Tokenizer 
-# ----------------------------------------------------------------------------
-class Tokenizer:
+class GraphSequencer:
     """SMILES from/to GraphSequence"""
 
     def __init__(
         self,
-        vocab_path: str = config.tokenization_config['vocab_path'],
-        operation_path: str = config.tokenization_config['operation_path'],
-        num_operations: int = config.tokenization_config['num_operations'],
+        vocab_path: str = config.sequencing_config['vocab_path'],
+        operation_path: str = config.sequencing_config['operation_path'],
+        num_operations: int = config.sequencing_config['num_operations'],
     ):
         vocab = VocabLoader.load_vocab(Path(vocab_path), return_vocab = True)
         VocabLoader.load_operations(Path(operation_path), num_operations)
@@ -37,13 +34,13 @@ class Tokenizer:
         self._reconstructor = MoleculeReconstructor(vocab)
         self._n_workers = 4
 
-    def _tokenize_one(self, smiles: str) -> GraphSequence:
+    def _graph2sequence_single(self, smiles: str) -> GraphSequence:
         """Tokenize one SMILES string."""
         mg = MolGraph(smiles, tokenizer="motif")
         fg = self._frag_builder.build(mg)
         return self._serializer.to_sequence(fg)
 
-    def tokenize(
+    def graph2sequence(
         self, 
         smiles: Union[str, List[str]]
     ) -> Union[GraphSequence, List[GraphSequence]]:
@@ -53,19 +50,19 @@ class Tokenizer:
         and return a list of GraphSequence.
         """
         if isinstance(smiles, str):
-            return self._tokenize_one(smiles)
+            return self._graph2sequence_single(smiles)
 
         if isinstance(smiles, (list, tuple)):
             if not smiles:
                 return []
 
             with ProcessPoolExecutor(max_workers=self._n_workers) as executor:
-                iterator = executor.map(self._tokenize_one, smiles)
+                iterator = executor.map(self._graph2sequence_single, smiles)
                 results = list(
                     tqdm(
                         iterator,
                         total=len(smiles),
-                        desc="Tokenizing SMILES",
+                        desc="Sequencing SMILES",
                         unit="mol"
                     )
                 )
@@ -73,7 +70,7 @@ class Tokenizer:
 
         raise TypeError(f"Expected str or list/tuple of str, got {type(smiles)}")
 
-    def _detokenize_one(self, seq: GraphSequence) -> str:
+    def _sequence2graph_one(self, seq: GraphSequence) -> str:
         """Detokenize one GraphSequence to SMILES string."""
 
         fg = self._serializer.from_sequence(seq)
@@ -81,12 +78,28 @@ class Tokenizer:
         smiles = self._reconstructor.to_smiles(atom_graph)
         return smiles
     
-    def detokenize(self, seq: GraphSequence) -> str:
+    def sequence2graph(self, seq: Union[List[Tuple[str, ...]], List[List[Tuple[str,...]]]]) -> str:
         """GraphSequence to SMILES"""
+        if isinstance(seq, list):
+            if isinstance(seq[0], str):
+                return self._sequence2graph_one(seq)
+            elif isinstance(seq[0], list):
+                return [self._sequence2graph_one(s) for s in seq]
+        raise TypeError("Provide a list of sequences or a single sequence.")
 
-        if isinstance(seq, str):
-            return self._detokenize_one(seq)
-        elif isinstance(seq, (list, tuple)):
-            return [self._detokenize_one(s) for s in seq]
-        else:
-            raise TypeError(f"Expected str or list of str, got {type(seq)}")
+    def output_sequences(self, train_path: str = config.sequencing_config['train_path'], output_path: str = config.sequencing_config.sequences_path ) -> None:
+
+        with open(train_path, 'r') as f:
+            lines = f.readlines()
+            smiles_list = [line.strip() for line in lines]
+            
+        sequenced_mols = self.graph2sequence(smiles_list)
+    
+        with open(output_path, 'w') as f:
+            for seq in sequenced_mols:
+                for tok in seq:
+                    f.write(f"{tok};")
+                # delete the last semicolon
+                f.seek(f.tell() - 1, 0)
+                f.truncate()
+                f.write("\n")

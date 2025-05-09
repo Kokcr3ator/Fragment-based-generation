@@ -73,7 +73,6 @@ def bond_type_2_bond_token(bondtype: BondType) -> str:
     if bondtype == BondType.DOUBLE:   return "(=)"
     if bondtype == BondType.TRIPLE:   return "(#)"
     if bondtype == BondType.AROMATIC: return "(:)"
-    if bondtype == 'INTERNAL' :       return "(-)"
     raise ValueError("unknown bond")
 
 def bond_token_2_bond_type(bond_token: str) -> BondType:
@@ -81,7 +80,6 @@ def bond_token_2_bond_type(bond_token: str) -> BondType:
     elif bond_token == "(=)": return BondType.DOUBLE
     elif bond_token == "(#)": return BondType.TRIPLE
     elif bond_token == "(:)": return BondType.AROMATIC
-    elif bond_token == "(-)": return 'INTERNAL'
     else:
         raise ValueError(f"Unknown bond token: {bond_token}")
     

@@ -1,6 +1,9 @@
-vocab_size: 1901
-max_node_id: 9
 max_rank: 6
-max_seq_len: 24
+max_fragment: 1878
+max_node_id: 9
 num_edge_types: 4
-node_vocab_size: 1882
+num_special_tokens: 3
+max_num_nodes: 12
+max_num_edges: 13
+max_seq_len: 24
+vocab_size: 1903

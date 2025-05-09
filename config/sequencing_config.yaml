@@ -7,4 +7,4 @@ num_operations: 500
 num_iters: 500
 min_frequency: 20
 mp_thd: 0.5
-tokenized_mols_path: '/home/tommaso/Fragment-based-generation/tokenized_sequences.txt'
+sequences_path: '/home/tommaso/Fragment-based-generation/graph_sequences.txt'

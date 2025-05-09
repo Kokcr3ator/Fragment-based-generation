@@ -39,7 +39,9 @@ class SequenceSerializer:
             # if node
             if isinstance(elem, int):
                 label = fragment_graph.nodes[elem]['label']
-                seq.append((label, index))
+                label_str = f"frag_{label}"
+                index_str = f"node_{index}"
+                seq.append((label_str, index_str))
                 order2index[elem] = index
                 index += 1
             # if edge
@@ -48,11 +50,15 @@ class SequenceSerializer:
                 for u, v in ((i, j), (j, i)):
                     # get_edge_data returns None if no edges exist, so or {} makes .values() empty
                     for e in (fragment_graph.get_edge_data(u, v) or {}).values():
+                        start_node_str = f"node_{order2index[u]}"
+                        dest_node_str = f"node_{order2index[v]}"
+                        source_rank_str = f"rank_{e['source_rank']}"
+                        dest_rank_str = f"rank_{e['dest_rank']}"
                         seq.append((
-                            order2index[u],
-                            order2index[v],
-                            e['source_rank'],
-                            e['dest_rank'],
+                            start_node_str,
+                            dest_node_str,
+                            source_rank_str,
+                            dest_rank_str,
                             bond_type_2_bond_token(e['bondtype'])
                         ))
 
@@ -61,32 +67,50 @@ class SequenceSerializer:
     
     def from_sequence(self, seq: GraphSequence) -> nx.MultiDiGraph:
         """
-        Reconstructs the fragment graph from GraphSequence.
+        Reconstructs the fragment graph from GraphSequence (with stringified tokens).
         """
         G = nx.MultiDiGraph()
-        # 1) add nodes
+
         for elem in seq:
-            if elem in ("(SOG)", "(EOG)"):
+            # skip special start/end tokens
+            if elem in (self.SOG, self.EOG):
                 continue
-            # node entries are 2‐tuples: (label, index)
+
+            # node entries: (label_str, idx_str)
             if isinstance(elem, tuple) and len(elem) == 2:
-                label, idx = elem
+                label_str, idx_str = elem
+                # parse out the original label
+                if label_str.startswith("frag_"):
+                    label = int(label_str[len("frag_"):])
+
+                # parse out the integer node index
+                if idx_str.startswith("node_"):
+                    idx = int(idx_str[len("node_"):])
                 G.add_node(idx, label=label)
 
-        # 2) add edges
-            # edge entries are 5‐tuples: (source_index, dest_index, source_rank, dest_rank, bond_token)
-            if isinstance(elem, tuple) and len(elem) == 5:
-                i_idx, j_idx, src_rank, dst_rank, bond_token = elem
+            # edge entries: (src_node_str, dst_node_str, src_rank_str, dst_rank_str, bond_token)
+            elif isinstance(elem, tuple) and len(elem) == 5:
+                src_str, dst_str, src_rank_str, dst_rank_str, bond_token = elem
+
+                if src_str.startswith("node_") and dst_str.startswith("node_"):
+                    src_idx = int(src_str[len("node_"):])
+                    dst_idx = int(dst_str[len("node_"):])
+
+                if src_rank_str.startswith("rank_") and dst_rank_str.startswith("rank_"):
+                    src_rank = int(src_rank_str[len("rank_"):])
+                    dst_rank = int(dst_rank_str[len("rank_"):])
+
                 bondtype = bond_token_2_bond_type(bond_token)
                 G.add_edge(
-                    i_idx,
-                    j_idx,
+                    src_idx,
+                    dst_idx,
                     source_rank=src_rank,
                     dest_rank=dst_rank,
                     bondtype=bondtype
                 )
+
         return G
-    
+
     def _BFS_order(self, G: nx.MultiDiGraph, root: int = None) -> List[Union[int, set]]:
         """
         Return a list of nodes and edges in BFS order starting from a root node.

@@ -3,34 +3,31 @@ import torch.nn as nn
 from torch import Tensor
 from typing import Dict
 from config import Config
-from .blocks import RMSNorm, TransformerBlock
+from .norms import RMSNorm
+from .transformer_block import TransformerBlock
 
 
 class NodeHead(nn.Module):
-    def __init__(self, config: Config):
+    def __init__(self, d_model: int, n_layers: int, n_heads: int, dropout: float, max_fragment: int, max_node_id: int):
         super().__init__()
-        model_config = config.model_config
-        dataset_config = config.dataset_config
-        
-        d_model: int = model_config.d_model
-        n_layers: int = model_config.n_layers
-        n_heads: int = model_config.n_heads
-        dropout: float = model_config.dropout
-        vocab_size: int = dataset_config.node_vocab_size
-        max_node_id: int = dataset_config.max_node_id
+        self.d_model = d_model
+        self.n_layers = n_layers
+        self.dropout = dropout
+        self.n_heads = n_heads
+        self.max_fragment = max_fragment
+        self.max_node_id = max_node_id
 
-        # Shared mini-transformer backbone
         self.layers = nn.ModuleList([
             TransformerBlock(d_model, n_heads, dropout)
             for _ in range(n_layers)
         ])
         self.final_norm = RMSNorm(d_model)
 
-        # Two separate classification heads
+        # 2 heads: one for node id and one for the node label
         self.idx_head = nn.Linear(d_model, max_node_id)
-        self.label_head = nn.Linear(d_model, vocab_size)
+        self.label_head = nn.Linear(d_model, max_fragment)
 
-    def forward(self, x: Tensor) -> Dict[str, Tensor]:
+    def forward(self, x: Tensor, attn_mask = None, key_padding_mask = None) -> Dict[str, Tensor]:
         """
         Args:
             x: Input tensor of shape (N_node, d_model)
@@ -41,7 +38,7 @@ class NodeHead(nn.Module):
                 - "node_label": (N_node, vocab_size)
         """
         for layer in self.layers:
-            x = layer(x)
+            x = layer(x, attn_mask = attn_mask, key_padding_mask = key_padding_mask)
         x = self.final_norm(x)
 
         outputs = {
@@ -52,18 +49,15 @@ class NodeHead(nn.Module):
 
 
 class EdgeHead(nn.Module):
-    def __init__(self, config: Config):
+    def __init__(self, d_model: int, n_layers: int, n_heads: int, dropout: float, max_node_id: int, max_rank: int, num_edge_types: int):
         super().__init__()
-        model_config = config.model_config
-        dataset_config = config.dataset_config
-
-        d_model: int = model_config.d_model
-        n_layers: int = model_config.n_layers
-        n_heads: int = model_config.n_heads
-        dropout: float = model_config.dropout
-        max_node_id: int = dataset_config.max_node_id
-        max_rank: int = dataset_config.max_rank
-        num_edge_types: int = dataset_config.num_edge_types
+        self.d_model = d_model
+        self.n_layers = n_layers
+        self.dropout = dropout
+        self.n_heads = n_heads
+        self.max_node_id = max_node_id
+        self.max_rank = max_rank
+        self.num_edge_types = num_edge_types
 
         self.layers = nn.ModuleList([
             TransformerBlock(d_model, n_heads, dropout)
@@ -71,14 +65,14 @@ class EdgeHead(nn.Module):
         ])
         self.final_norm = RMSNorm(d_model)
 
-        # Separate output heads
+        # 5 heads for source node id, source connection site, dest node id, dest connection site, and edge type
         self.source_id_head = nn.Linear(d_model, max_node_id)
         self.source_site_head = nn.Linear(d_model, max_rank)
         self.dest_id_head = nn.Linear(d_model, max_node_id)
         self.dest_site_head = nn.Linear(d_model, max_rank)
         self.edge_type_head = nn.Linear(d_model, num_edge_types)
 
-    def forward(self, x: Tensor) -> Dict[str, Tensor]:
+    def forward(self, x: Tensor, attn_mask = None, key_padding_mask = None) -> Dict[str, Tensor]:
         """
         Args:
             x: Input tensor of shape (N_edge, d_model)
@@ -92,7 +86,7 @@ class EdgeHead(nn.Module):
                 - "edge_type": (N_edge, num_edge_types)
         """
         for layer in self.layers:
-            x = layer(x)
+            x = layer(x, attn_mask = attn_mask, key_padding_mask = key_padding_mask)
         x = self.final_norm(x)
 
         outputs = {

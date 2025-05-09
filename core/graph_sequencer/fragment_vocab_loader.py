@@ -1,4 +1,4 @@
-from typing import Dict, List, Union
+from typing import Dict, Union
 from pathlib import Path
 from core import MolGraph
 

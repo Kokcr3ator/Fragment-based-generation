@@ -2,16 +2,16 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 from typing import Optional
-from config import Config
-from .blocks import RMSNorm, TransformerBlock
+from .norms import RMSNorm
+from .transformer_block import TransformerBlock
 
 class TransformerEncoder(nn.Module):
-    def __init__(self, config: Config):
+    def __init__(self, d_model: int, n_layers: int, n_heads: int, dropout: float):
         super().__init__()
-        self.d_model: int = config.model_config.d_model
-        self.n_layers: int = config.model_config.n_encoder_layers
-        self.dropout: float = config.model_config.dropout
-        self.n_heads: int = config.model_config.n_heads
+        self.d_model: int = d_model
+        self.n_layers: int = n_layers
+        self.dropout: float = dropout
+        self.n_heads: int = n_heads
 
         self.layers = nn.ModuleList([
             TransformerBlock(self.d_model, self.n_heads, self.dropout)
