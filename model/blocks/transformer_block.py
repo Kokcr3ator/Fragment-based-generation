@@ -22,29 +22,33 @@ class TransformerBlock(nn.Module):
 
     def forward(
         self,
-        x: Tensor,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
         attn_mask: Optional[Tensor] = None,
-        key_padding_mask: Optional[Tensor] = None
+        key_padding_mask: Optional[Tensor] = None,
     ) -> Tensor:
         """
         Args:
-            x: Input tensor of shape (B, T, C)
+            x: Input tensor of shape (B, T, d)
             attn_mask: Optional tensor of shape (T, T)
             key_padding_mask: Optional tensor of shape (B, T)
 
         Returns:
-            Tensor of the same shape (B, T, C) after attention and FFN
+            Tensor of the same shape (B, T, d) after attention and FFN
         """
-        x_norm = self.norm1(x)
+        q_norm = self.norm1(query)
+        k_norm = self.norm1(key)
+        v_norm = self.norm1(value)
         attn_out, _ = self.attn(
-            x_norm,        # query
-            x_norm,        # key
-            x_norm,        # value
+            q_norm,        
+            k_norm,        
+            v_norm,        
             attn_mask=attn_mask,
             key_padding_mask=key_padding_mask
         )
-        x = x + self.dropout(attn_out)
+        query = query + self.dropout(attn_out)
 
-        ffn_out = self.ffn(self.norm2(x))
-        x = x + self.dropout(ffn_out)
-        return x
+        ffn_out = self.ffn(self.norm2(query))
+        query = query + self.dropout(ffn_out)
+        return query

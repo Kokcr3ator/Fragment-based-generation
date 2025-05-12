@@ -21,7 +21,9 @@ class TransformerEncoder(nn.Module):
 
     def forward(
         self,
-        x: Tensor,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
         attn_mask: Optional[Tensor] = None,
         key_padding_mask: Optional[Tensor] = None
     ) -> Tensor:
@@ -38,7 +40,9 @@ class TransformerEncoder(nn.Module):
         """
         for layer in self.layers:
             x = layer(
-                x,
+                query = query,
+                key = key,
+                value= value,
                 attn_mask=attn_mask,
                 key_padding_mask=key_padding_mask
             )

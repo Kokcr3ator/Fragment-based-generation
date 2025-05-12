@@ -4,6 +4,7 @@ from config import config
 import os
 import json
 from .tokenizer import Tokenizer
+import numpy as np
 
 class GraphDataset(Dataset):
 
@@ -126,15 +127,17 @@ def collate_fn(batch):
             "node_flattened_attention_mask": flattened_attention_mask(max_n_nodes_per_seq*2, 2),
             "edge_flattened_attention_mask": flattened_attention_mask(max_n_edges_per_seq*5, 5),
             "seq_flattened_attention_mask": seq_flattened_attention_mask(routs),
-            "seq_flattened_padding_mask": seq_flattened_padding_mask(routs)
+            "seq_flattened_padding_mask": seq_flattened_padding_mask(routs),
+            "node_head_attention_mask": node_head_attention_mask(routs),
+            "edge_head_attention_mask": edge_head_attention_mask(routs),
         }
 
 def flattened_attention_mask(seq_len, block_size) -> torch.Tensor:
     if seq_len % block_size != 0:
         raise ValueError("seq_len must be a multiple of block_size")
-    mask = torch.zeros((seq_len, seq_len), dtype=torch.bool)
+    mask = torch.ones((seq_len, seq_len), dtype=torch.bool)
     for i in range(1 , int(seq_len/block_size)):
-        mask[:(i+1)*block_size, i*block_size:(i+1)*block_size] = True
+        mask[:(i+1)*block_size, i*block_size:(i+1)*block_size] = False
     return mask
 
 def seq_flattened_attention_mask(routing):
@@ -144,16 +147,16 @@ def seq_flattened_attention_mask(routing):
     num_tokens = max_nodes *2 + max_edges * 5
     mask = torch.zeros((B, num_tokens, num_tokens), dtype=torch.bool)
     for b in range(B):
+        ptr = 0
         for i in range(len(routing[b]) -1):
             # if node
             if routing[b][i] == 0:
-                block_size = 2
-                mask[b,:(i+2)*block_size, (i+1)*block_size:(i+2)*block_size] = True
+                mask[b, :ptr, ptr:ptr +2] = True    
+                ptr +=2
             # if edge
             elif routing[b][i] == 1:
-                block_size = 5
-                mask[b,:(i+2)*block_size, (i+1)*block_size:(i+2)*block_size] = True
-            
+                mask[b, :ptr, ptr:ptr+5] = True
+                ptr += 5
             else:
                 continue
     return mask
@@ -165,11 +168,53 @@ def seq_flattened_padding_mask(routing):
     num_tokens = max_nodes *2 + max_edges * 5
     mask = torch.ones((B, num_tokens), dtype=torch.bool)
     for b in range(B):
-        for i in range(len(routing[b])):
+        tokens_dict = {key: val for (key,val) in zip(*np.unique(routing[b], return_counts=True))}
+        n_not_padded = tokens_dict[0] * 2 + tokens_dict[1] * 5
+        mask[b, :n_not_padded] = False
+    return mask
+
+def node_head_attention_mask(routing):
+    B, _ = routing.shape
+    max_nodes = config.dataset_config['max_num_nodes']
+    max_edges = config.dataset_config['max_num_edges']
+    num_tokens = max_nodes *2 + max_edges * 5
+    mask = torch.zeros((B, max_nodes, num_tokens), dtype=torch.bool)
+    for b in range(B):
+        q_ptr = 0
+        k_ptr = 0
+        for i in range(len(routing[b]) -1):
+            # if node
             if routing[b][i] == 0:
-                mask[b, i*2:(i+1)*2] = False
+                mask[b, :q_ptr, k_ptr:k_ptr +2] = True
+                k_ptr +=2
+                q_ptr += 1
+            # if edge
             elif routing[b][i] == 1:
-                mask[b, i*5:(i+1)*5] = False
+                mask[b, :q_ptr, k_ptr:k_ptr +5] = True
+                k_ptr += 5
+            else:
+                continue
+    return mask
+
+def edge_head_attention_mask(routing):
+    B, _ = routing.shape
+    max_nodes = config.dataset_config['max_num_nodes']
+    max_edges = config.dataset_config['max_num_edges']
+    num_tokens = max_nodes *2 + max_edges * 5
+    mask = torch.zeros((B, max_edges, num_tokens), dtype=torch.bool)
+    for b in range(B):
+        q_ptr = 0
+        k_ptr = 0
+        for i in range(len(routing[b]) -1):
+            # if node
+            if routing[b][i] == 0:
+                mask[b, :q_ptr, k_ptr:k_ptr +2] = True
+                k_ptr +=2
+            # if edge
+            elif routing[b][i] == 1:
+                mask[b, :q_ptr, k_ptr:k_ptr +5] = True
+                k_ptr += 5
+                q_ptr += 1
             else:
                 continue
     return mask

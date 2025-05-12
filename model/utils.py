@@ -46,7 +46,7 @@ def get_logical_routing_positions(routing, max_nodes, max_edges):
 
     return node_positions, edge_positions
 
-def interleave_nodes_edges(nodes, edges, routing, rout_PAD_token):
+def concatenate_nodes_edges(nodes, edges, routing, rout_PAD_token):
     """
     nodes: (B, max_nodes*2, D)
     edges: (B, max_edges*5, D)
@@ -58,32 +58,60 @@ def interleave_nodes_edges(nodes, edges, routing, rout_PAD_token):
     _, E_tokens, _ = edges.shape
     total_tokens = N_tokens + E_tokens
 
-    result = torch.zeros((B, total_tokens, D), dtype=nodes.dtype, device=nodes.device)
-    token_to_routing_idx = torch.full((B, total_tokens), rout_PAD_token, dtype=torch.long, device=nodes.device)
-
+    ordered_concat = torch.zeros((B, total_tokens, D), dtype=nodes.dtype, device=nodes.device)
     for b in range(B):
         node_ptr = 0
         edge_ptr = 0
         t_idx = 0
         for r_idx, r in enumerate(routing[b]):
             if r == rout_PAD_token:
-                continue  # skip padded routing entries
+                continue
             elif r == 0:
                 for _ in range(2):
                     if node_ptr < N_tokens:
-                        result[b, t_idx] = nodes[b, node_ptr]
-                        token_to_routing_idx[b, t_idx] = r_idx
+                        ordered_concat[b, t_idx] = nodes[b, node_ptr]
                         node_ptr += 1
                         t_idx += 1
             elif r == 1:
                 for _ in range(5):
                     if edge_ptr < E_tokens:
-                        result[b, t_idx] = edges[b, edge_ptr]
-                        token_to_routing_idx[b, t_idx] = r_idx
+                        ordered_concat[b, t_idx] = edges[b, edge_ptr]
                         edge_ptr += 1
                         t_idx += 1
 
-    return result, token_to_routing_idx
+    return ordered_concat
+
+
+def calculate_inputs(x, routing, rout_PAD_token, max_nodes, max_edges):
+    B, _, D = x.shape
+    routing_input = torch.zeros((B, routing.shape[1], D), dtype=x.dtype, device=x.device)
+    query_node = torch.zeros((B, max_nodes, D), dtype=x.dtype, device=x.device)
+    query_edge = torch.zeros((B, max_edges, D), dtype=x.dtype, device=x.device)
+    for b in range(B):
+        t_ptr = 0
+        node_ptr = 0
+        edge_ptr = 0
+        for r_idx, r in enumerate(routing[b]):
+            if r == rout_PAD_token:
+                routing_input[b, r_idx] = x[b, t_ptr]
+                if node_ptr < max_nodes:
+                    query_node[b, node_ptr] = x[b, t_ptr]
+                    node_ptr += 1
+            elif r == 0:
+                t_ptr += 2
+                routing_input[b, r_idx] = x[b, t_ptr -1]
+                query_node[b, node_ptr] = x[b, t_ptr -1]
+                node_ptr += 1
+            elif r == 1:
+                t_ptr += 5
+                routing_input[b, r_idx] = x[b, t_ptr -1]
+                if edge_ptr < max_edges:
+                    query_edge[b, edge_ptr] = x[b, t_ptr -1]
+                    edge_ptr += 1
+
+
+    return routing_input, query_node, query_edge
+
 
 def generate_sample_batch(
     batch_size=2,
@@ -143,3 +171,11 @@ def generate_sample_batch(
         "edge_mask": edge_mask,
         "routing_mask": routing_mask,
     }
+
+def lumped_attention_mask(seq_len, block_size) -> torch.Tensor:
+    if seq_len % block_size != 0:
+        raise ValueError("seq_len must be a multiple of block_size")
+    mask = torch.zeros((seq_len, seq_len), dtype=torch.bool)
+    for i in range(1 , int(seq_len/block_size)):
+        mask[:(i+1)*block_size, i*block_size:(i+1)*block_size] = True
+    return mask

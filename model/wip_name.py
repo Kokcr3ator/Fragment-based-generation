@@ -6,7 +6,7 @@ from torchinfo import summary
 from .blocks.router import Router
 from .blocks.heads import NodeHead, EdgeHead
 from .blocks.encoder import TransformerEncoder
-from .utils import PositionalEncoding, interleave_nodes_edges, generate_sample_batch
+from .utils import PositionalEncoding, generate_sample_batch, concatenate_nodes_edges, calculate_inputs
 
 from config import Config
 config = Config()
@@ -35,11 +35,11 @@ class GraphGenerator(nn.Module):
         sample_input = generate_sample_batch(batch_size=batch_size)
         print("Model structure:\n")
         print(summary(self, input_data=(sample_input,), depth=depth, col_names=["input_size", "output_size", "num_params", "trainable"]))
-        print("\nParameter count:")
-        total = sum(p.numel() for p in self.parameters())
-        trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
-        print(f"  Total:     {total:,}")
-        print(f"  Trainable: {trainable:,}")
+        # print("\nParameter count:")
+        # total = sum(p.numel() for p in self.parameters())
+        # trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        # print(f"  Total:     {total:,}")
+        # print(f"  Trainable: {trainable:,}")
 
     def _parse_config(self, config: Config) -> None:
         """
@@ -67,7 +67,7 @@ class GraphGenerator(nn.Module):
         batch: Tensor,
     ) :            
         nodes, edges, routing, routing_next, node_mask, edge_mask, rout_mask, node_att_mask, \
-        edge_att_mask, seq_att_mask, seq_pad_mask = batch.values()
+        edge_att_mask, seq_att_mask, seq_pad_mask, node_head_attention_mask, edge_head_attention_mask = batch.values()
         B, max_nodes = nodes.shape[:2]
         _, max_edges = edges.shape[:2]
         nodes = nodes.view(B, -1)
@@ -80,31 +80,41 @@ class GraphGenerator(nn.Module):
         node_pe, edge_pe = self.positional_encoding(routing, max_nodes, max_edges)
         nodes = nodes + node_pe
         edges = edges + edge_pe
-
         padding_mask_nodes = node_mask.view(B, -1)
-        nodes = self.node_encoder(nodes,
-                                   attn_mask = node_att_mask, 
+        nodes = self.node_encoder(query = nodes,
+                                key = nodes,
+                                value = nodes,
+                                attn_mask = node_att_mask, 
                                 key_padding_mask = padding_mask_nodes
                                    )
         padding_mask_edges = edge_mask.view(B, -1)
-        edges = self.edge_encoder(edges,
-                                   attn_mask = edge_att_mask,
-                                 key_padding_mask = padding_mask_edges
+        edges = self.edge_encoder(query = edges,
+                                key = edges,
+                                value = edges,
+                                attn_mask = edge_att_mask,
+                                key_padding_mask = padding_mask_edges
                                    )
 
         # concatenate nodes and edges
-        x, token_to_routing_idx = interleave_nodes_edges(nodes, edges, routing, self.rout_PAD_token)
+        x = concatenate_nodes_edges(nodes, edges, routing, self.rout_PAD_token)
 
         expanded_mask = seq_att_mask.unsqueeze(1).expand(-1, self.n_heads, -1, -1)
         expanded_mask = expanded_mask.reshape(B * self.n_heads, x.shape[1], x.shape[1])
         x = self.attn(x,x,x, attn_mask = expanded_mask, key_padding_mask = seq_pad_mask )[0]
-        router_logits = self.router(x)
+        rout_input, query_node, query_edge= calculate_inputs(x, routing, self.rout_PAD_token, max_nodes, max_edges)
+        router_logits = self.router(rout_input)
+        node_head_attention_mask = node_head_attention_mask.unsqueeze(1).expand(-1, self.n_heads, -1, -1)
+        node_head_attention_mask = node_head_attention_mask.reshape(B * self.n_heads, query_node.shape[1], x.shape[1])
+        edge_head_attention_mask = edge_head_attention_mask.unsqueeze(1).expand(-1, self.n_heads, -1, -1)
+        edge_head_attention_mask = edge_head_attention_mask.reshape(B * self.n_heads, query_edge.shape[1], x.shape[1])
+        node_output = self.node_head(query_node, x,x, attn_mask = node_head_attention_mask, key_padding_mask = seq_pad_mask)
+        edge_output = self.edge_head(query_edge, x,x, attn_mask = edge_head_attention_mask, key_padding_mask = seq_pad_mask)
 
-        next_labels = torch.gather(routing_next, dim=1, index=token_to_routing_idx)  # (B, 2·max_nodes + 5·max_edges)
+        # next_labels = torch.gather(routing_next, dim=1, index=token_to_routing_idx)  # (B, 2·max_nodes + 5·max_edges)
         # WIP
         # this still needs some work the idea is that for the node head the queries are going to be the tokens before the node
         # keys and values are the tokens before that 
         # same goes for the edge head
         # change the node and edge head architecture?
 
-        return x
+        return node_output, edge_output, router_logits

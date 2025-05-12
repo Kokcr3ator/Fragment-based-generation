@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 from typing import Dict
-from config import Config
 from .norms import RMSNorm
 from .transformer_block import TransformerBlock
 
@@ -27,18 +26,9 @@ class NodeHead(nn.Module):
         self.idx_head = nn.Linear(d_model, max_node_id)
         self.label_head = nn.Linear(d_model, max_fragment)
 
-    def forward(self, x: Tensor, attn_mask = None, key_padding_mask = None) -> Dict[str, Tensor]:
-        """
-        Args:
-            x: Input tensor of shape (N_node, d_model)
-
-        Returns:
-            Dict with:
-                - "node_id": (N_node, max_node_id)
-                - "node_label": (N_node, vocab_size)
-        """
+    def forward(self, query: Tensor, key: Tensor, value: Tensor, attn_mask = None, key_padding_mask = None) -> Dict[str, Tensor]:
         for layer in self.layers:
-            x = layer(x, attn_mask = attn_mask, key_padding_mask = key_padding_mask)
+            x = layer(query, key, value, attn_mask = attn_mask, key_padding_mask = key_padding_mask)
         x = self.final_norm(x)
 
         outputs = {
@@ -72,7 +62,7 @@ class EdgeHead(nn.Module):
         self.dest_site_head = nn.Linear(d_model, max_rank)
         self.edge_type_head = nn.Linear(d_model, num_edge_types)
 
-    def forward(self, x: Tensor, attn_mask = None, key_padding_mask = None) -> Dict[str, Tensor]:
+    def forward(self, query: Tensor, key: Tensor, value: Tensor, attn_mask = None, key_padding_mask = None) -> Dict[str, Tensor]:
         """
         Args:
             x: Input tensor of shape (N_edge, d_model)
@@ -86,7 +76,7 @@ class EdgeHead(nn.Module):
                 - "edge_type": (N_edge, num_edge_types)
         """
         for layer in self.layers:
-            x = layer(x, attn_mask = attn_mask, key_padding_mask = key_padding_mask)
+            x = layer(query, key, value, attn_mask = attn_mask, key_padding_mask = key_padding_mask)
         x = self.final_norm(x)
 
         outputs = {
